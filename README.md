@@ -78,7 +78,7 @@ git checkout -b feature/nueva-funcionalidad
 4. Realiza tus cambios y envía un Pull Request con una descripción de las modificaciones.
 
 ## Licencia
-StellarPolAnalyzer se distribuye bajo la Licencia MIT. Consulta el archivo LICENSE para más detalles.
+StellarPolAnalyzer se distribuye bajo la Licencia Apache License 2.0. Consulta el archivo LICENSE para más detalles.
 
 ## Contacto
 Para preguntas, sugerencias o reportar problemas, por favor abre un issue en este repositorio o contacta a omellizo@gmail.com.
