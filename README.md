@@ -24,7 +24,7 @@ StellarPolAnalyzer es una librería de Python para el análisis de imágenes pol
 
 ### Desde PyPI
 
-Una vez publicado, puedes instalar el paquete con:
+Instalar el paquete con:
 
 ```bash
 pip install StellarPolAnalyzer
