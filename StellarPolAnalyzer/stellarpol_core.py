@@ -10,17 +10,18 @@ Se incluyen funciones para:
 - Función de alto nivel: process_image.
 """
 
-from astropy.io import fits
-import matplotlib.pyplot as plt
 import numpy as np
+from astropy.io import fits
 from astropy.visualization import ZScaleInterval
-from photutils import DAOStarFinder
 from astropy.stats import sigma_clipped_stats
-from sklearn.neighbors import NearestNeighbors
+import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
-from collections import Counter
+from photutils import DAOStarFinder
+from photutils import CircularAperture, CircularAnnulus, aperture_photometry, ApertureStats
+from sklearn.neighbors import NearestNeighbors
 from skimage.registration import phase_cross_correlation
 from scipy.ndimage import shift
+from collections import Counter
 
 def detect_stars(image_data, fwhm=3.0, threshold_multiplier=5.0):
     """
@@ -195,10 +196,297 @@ def save_fits_with_same_headers(original_filename, new_image, output_filename):
     hdu.writeto(output_filename, overwrite=True)
     print(f"Se ha guardado el archivo: {output_filename}")
 
-if __name__ == '__main__':
-    image_path = 'caf-20231114-22_35_48-sci-blap_b_f.fits'
-    image_data, sources, candidate_pairs, final_pairs, mode_distance, mode_angle = process_image(
-        image_path, fwhm=3.0, threshold_multiplier=5.0, tol_distance=1.44, tol_angle=1.2, max_distance=75)
-    print("Número de parejas candidatas:", len(candidate_pairs))
-    print("Número de parejas finales:", len(final_pairs))
-    draw_pairs(image_data, sources, final_pairs, len(sources), mode_distance, mode_angle, 1.44, 1.2)
+def process_four_polarimetric_images(ref_path, other_paths,
+                                     fwhm=3.0, threshold_multiplier=5.0,
+                                     tol_distance=0.52, tol_angle=0.30,
+                                     max_distance=75):
+    """
+    Procesa un conjunto de 4 imágenes polarimétricas correspondientes a diferentes ángulos.
+    
+    Parámetros:
+      ref_path: string
+          Path de la imagen de referencia (por ejemplo, la imagen tomada a 0°).
+      other_paths: list of strings
+          Lista con los paths de las otras 3 imágenes.
+      fwhm: float, opcional (default=3.0)
+          Valor de FWHM para la detección de estrellas.
+      threshold_multiplier: float, opcional (default=5.0)
+          Multiplicador del threshold para la detección de estrellas.
+      tol_distance: float, opcional (default=0.52)
+          Tolerancia en la distancia (en píxeles) para filtrar las parejas.
+      tol_angle: float, opcional (default=0.30)
+          Tolerancia en el ángulo (en grados) para filtrar las parejas.
+      max_distance: float, opcional (default=75)
+          Radio máximo (en píxeles) para encontrar parejas, usado en process_image.
+      align_max_distance: float, opcional (default=75)
+          Radio máximo (en píxeles) para la alineación (usado en align_images).
+    
+    Flujo:
+      1. Se carga la imagen de referencia (ref_path).
+      2. Para cada uno de los paths en other_paths:
+         - Se carga la imagen.
+         - Se alinea con la imagen de referencia usando `align_images`.
+         - Se guarda la imagen alineada utilizando `save_fits_with_same_headers`,
+           generando un nuevo archivo (por ejemplo, con sufijo "-aligned.fits").
+      3. Se crea una lista final de 4 paths: el ref_path y los 3 archivos alineados.
+      4. Para cada imagen en esta lista, se llama a `process_image` utilizando los parámetros especificados.
+    
+    Retorna:
+      final_image_paths: list of strings
+          Lista de paths de las imágenes finales (la de referencia y las 3 alineadas).
+      results: list
+          Lista con los resultados de `process_image` para cada imagen.
+    """
+    
+    # Cargar la imagen de referencia
+    ref_data = fits.getdata(ref_path)
+    
+    # Lista para almacenar los paths finales
+    final_image_paths = [ref_path]
+    
+    # Para cada imagen de las otras 3, alinear a la imagen de referencia y guardar la imagen alineada.
+    for path in other_paths:
+        img_data = fits.getdata(path)
+        aligned_image, shift_est = align_images(ref_data, img_data)
+        # Generamos el nombre del archivo alineado; por ejemplo, reemplazamos '.fits' por '-aligned.fits'
+        output_filename = path.replace(".fits", "-aligned.fits")
+        save_fits_with_same_headers(path, aligned_image, output_filename)
+        final_image_paths.append(output_filename)
+    
+    # Procesar cada imagen utilizando process_image
+    results = []
+    for path in final_image_paths:
+        result = process_image(path, fwhm=fwhm, threshold_multiplier=threshold_multiplier,
+                                tol_distance=tol_distance, tol_angle=tol_angle, max_distance=max_distance)
+        results.append(result)
+    
+    return final_image_paths, results
+
+def compute_polarimetry_for_pairs(final_image_paths, sources, final_pairs,
+                                  aperture_radius=5, r_in=7, r_out=10, SNR_threshold=5):
+    """
+    Calcula la fotometría y los parámetros de polarimetría para cada par de estrellas.
+
+    Parámetros:
+      final_image_paths : list of str
+          Lista de 4 paths a las imágenes polarimétricas (ya alineadas) en el orden:
+          [imagen_0°, imagen_22.5°, imagen_45°, imagen_67.5°].
+      sources : list or Table
+          Lista de fuentes detectadas en la imagen de referencia, con campos 'xcentroid' y 'ycentroid'.
+      final_pairs : list of tuples
+          Lista de parejas finales, cada una del tipo (i, j, distance, angle), donde i y j son índices en `sources`.
+      aperture_radius : float, opcional
+          Radio de la apertura (en píxeles) para realizar la fotometría de apertura.
+      r_in : float, opcional
+          Radio interior para el anillo de fondo.
+      r_out : float, opcional
+          Radio exterior para el anillo de fondo.
+      SNR_threshold : float, opcional
+          Valor mínimo de SNR para considerar la medición válida.
+
+    Retorna:
+      results : list of dict
+          Cada elemento corresponde a un par de estrellas y contiene:
+            - 'pair_indices' : (i, j)
+            - 'fluxes' : {angle: {'ord_flux': ..., 'ext_flux': ..., 'ND': ..., 'error': ...}}
+                          para cada uno de los 4 ángulos.
+            - 'q' : Valor calculado de q (en porcentaje)
+            - 'u' : Valor calculado de u (en porcentaje)
+            - 'P' : Grado de polarización
+            - 'theta' : Ángulo de polarización (en grados)
+    """
+
+    # Obtener las posiciones para cada par usando la imagen de referencia
+    # Se asume que final_pairs contiene índices (i, j) que refieren a elementos en `sources`
+    # y que para cada par, el de menor x se considera "ordinario" y el de mayor x, "extraordinario".
+    source_positions = np.array([(src['xcentroid'], src['ycentroid']) for src in sources])
+
+    # Para cada par, determina la posición de cada miembro.
+    pair_positions = []
+    for (i, j, dist, ang) in final_pairs:
+        pos_i = source_positions[i]
+        pos_j = source_positions[j]
+        if pos_i[0] < pos_j[0]:
+            # pos_i es ordinario y pos_j es extraordinario
+            pair_positions.append({'ord': pos_i, 'ext': pos_j})
+        else:
+            pair_positions.append({'ord': pos_j, 'ext': pos_i})
+
+    # Inicializa un diccionario para almacenar las fotometrías para cada imagen.
+    # Usaremos el ángulo de cada imagen según el orden de final_image_paths.
+    # Asumimos: final_image_paths[0] corresponde a 0°, [1] a 22.5°, [2] a 45° y [3] a 67.5°.
+    image_angles = [0.0, 22.5, 45.0, 67.5]
+    # Guardaremos para cada par un diccionario: fluxes[angle] = {'ord_flux': valor, 'ext_flux': valor, 'ND': valor, 'error': valor}
+    pair_fluxes = [dict() for _ in range(len(pair_positions))]
+
+    # Para cada imagen de polarización
+    for path, pol_angle in zip(final_image_paths, image_angles):
+        with fits.open(path) as hdul:
+            data = hdul[0].data
+
+        # Realizar la fotometría para cada par
+        # Se crearán aperturas para la posición ordinaria y extraordinaria de cada par.
+        ord_positions = np.array([pair['ord'] for pair in pair_positions])
+        ext_positions = np.array([pair['ext'] for pair in pair_positions])
+        ord_apertures = CircularAperture(ord_positions, r=aperture_radius)
+        ext_apertures = CircularAperture(ext_positions, r=aperture_radius)
+        # Define anillos de fondo, opcionalmente
+        ord_annulus = CircularAnnulus(ord_positions, r_in=r_in, r_out=r_out)
+        ext_annulus = CircularAnnulus(ext_positions, r_in=r_in, r_out=r_out)
+
+        # Obtener estadísticas de fondo
+        ord_stats = ApertureStats(data, ord_annulus)
+        ext_stats = ApertureStats(data, ext_annulus)
+        ord_bkg = ord_stats.mean * ord_apertures.area
+        ext_bkg = ext_stats.mean * ext_apertures.area
+
+        # Fotometría en ambas aperturas
+        ord_phot_table = aperture_photometry(data, ord_apertures)
+        ext_phot_table = aperture_photometry(data, ext_apertures)
+        # Resta del fondo
+        ord_flux = ord_phot_table['aperture_sum'] - ord_bkg
+        ext_flux = ext_phot_table['aperture_sum'] - ext_bkg
+
+        # Calcular SNR para cada medición (usando una aproximación)
+        ord_SNR = ord_flux / np.sqrt(ord_flux + ord_apertures.area * ord_stats.std**2)
+        ext_SNR = ext_flux / np.sqrt(ext_flux + ext_apertures.area * ext_stats.std**2)
+
+        # Para cada par, guardar fotometría si SNR > SNR_threshold, de lo contrario se marca como no fiable.
+        for idx in range(len(pair_positions)):
+            # Si cualquiera de las mediciones es negativa o con SNR insuficiente, se omite.
+            if (ord_flux[idx] <= 0) or (ext_flux[idx] <= 0):
+                continue
+            if (ord_SNR[idx] < SNR_threshold) or (ext_SNR[idx] < SNR_threshold):
+                continue
+
+            # Calcular el valor normalizado de diferencia ND para este ángulo:
+            # ND = (ext - ord) / (ext + ord)
+            ND = (ext_flux[idx] - ord_flux[idx]) / (ext_flux[idx] + ord_flux[idx])
+            # Se estima un error simple para ND (esto puede refinarse)
+            # Por ejemplo, error = 0.5/sqrt(flux * factor) como en tu código, aquí se usa un factor arbitrario.
+            error = 0.5 / np.sqrt(abs(ord_flux[idx] + ext_flux[idx]))  # ejemplo simple
+
+            # Almacena los resultados para este par para el ángulo actual.
+            pair_fluxes[idx][pol_angle] = {
+                'ord_flux': ord_flux[idx],
+                'ext_flux': ext_flux[idx],
+                'ND': ND,
+                'error': error
+            }
+    
+    # Ahora, para cada par, se deben combinar las mediciones para calcular los parámetros de polarimetría.
+    # Suponiendo que usamos la convención:
+    # q = ((ND[0°] - ND[45°]) / 2) * 100 
+    # u = ((ND[22.5°] - ND[67.5°]) / 2) * 100
+    # (Aquí se puede ajustar según tu calibración)
+    polarimetry_results = []
+    for idx, flux_dict in enumerate(pair_fluxes):
+        # Verificar que se tienen mediciones para todos los ángulos necesarios
+        if (0.0 not in flux_dict) or (45.0 not in flux_dict) or (22.5 not in flux_dict) or (67.5 not in flux_dict):
+            continue
+
+        ND0 = flux_dict[0.0]['ND']
+        ND22 = flux_dict[22.5]['ND']
+        ND45 = flux_dict[45.0]['ND']
+        ND67 = flux_dict[67.5]['ND']
+        # Promedio simple de los errores:
+        err_total = np.mean([flux_dict[angle]['error'] for angle in [0.0, 22.5, 45.0, 67.5]])
+
+        q = ((ND0 - ND45) / 2.0) * 100.0
+        u = ((ND22 - ND67) / 2.0) * 100.0
+        P = np.sqrt(q**2 + u**2)
+        theta = 0.5 * np.degrees(np.arctan2(u, q))
+        # Propagación de errores simple
+        err_theta = (0.5 * err_total) * 100 if P != 0 else 0.0
+
+        polarimetry_results.append({
+            'pair_index': idx,
+            'q': q,
+            'u': u,
+            'P': P,
+            'theta': theta,
+            'error': err_total,
+            'fluxes': flux_dict
+        })
+    
+    return polarimetry_results
+
+def compute_full_polarimetry(ref_path, other_paths, pol_angles,
+                             fwhm=3.0, threshold_multiplier=5.0,
+                             tol_distance=0.52, tol_angle=0.30, max_distance=75,
+                             phot_aperture_radius=5, r_in=7, r_out=10, SNR_threshold=5):
+    """
+    Integra el procesamiento de 4 imágenes polarimétricas y realiza la fotometría
+    para calcular los parámetros de polarimetría para cada pareja de estrellas detectadas.
+
+    Parámetros:
+      - ref_path: string
+          Path de la imagen de referencia (por ejemplo, la imagen a 0°).
+      - other_paths: list of strings
+          Lista de paths de las otras 3 imágenes (por ejemplo, las tomadas a 22.5°, 45° y 67.5°).
+      - pol_angles: list of floats
+          Lista de ángulos de polarización correspondientes a las 4 imágenes. El orden debe coincidir
+          con [ref_path] + other_paths.
+      - fwhm: float (default=3.0)
+          Parámetro FWHM para la detección de estrellas.
+      - threshold_multiplier: float (default=5.0)
+          Multiplicador del umbral para la detección de estrellas.
+      - tol_distance: float (default=0.52)
+          Tolerancia en la distancia (en píxeles) para el filtrado de parejas.
+      - tol_angle: float (default=0.30)
+          Tolerancia en el ángulo (en grados) para el filtrado de parejas.
+      - max_distance: float (default=75)
+          Radio máximo (en píxeles) para buscar parejas en el método process_image.
+      - phot_aperture_radius: float (default=5)
+          Radio de la apertura para la fotometría.
+      - r_in: float (default=7)
+          Radio interior para el anillo de fondo.
+      - r_out: float (default=10)
+          Radio exterior para el anillo de fondo.
+      - SNR_threshold: float (default=5)
+          Valor mínimo de SNR para considerar válida la medición fotométrica.
+      
+    Flujo:
+      1. Se llama al método process_four_polarimetric_images (que debe formar parte de la librería)
+         para alinear y procesar las 4 imágenes. Esto retorna (final_image_paths, results), donde 
+         results es una lista con, para cada imagen, una tupla:
+         (image_data, sources, candidate_pairs, final_pairs, mode_distance, mode_angle).
+      2. Se toma la lista de final_image_paths y se extrae, de la imagen de referencia (por ejemplo, results[0]),
+         los parámetros sources y final_pairs.
+      3. Se llama a compute_polarimetry_for_pairs (otro método de la librería) pasando:
+            - final_image_paths,
+            - sources (de la imagen de referencia),
+            - final_pairs,
+            - y los parámetros de fotometría (aperture_radius, r_in, r_out, SNR_threshold).
+      4. Se retorna el resultado de compute_polarimetry_for_pairs, que es una lista de diccionarios
+         con los parámetros de polarimetría (q, u, P, theta, errores, etc.) para cada par.
+
+    Retorna:
+      - polarimetry_results: list of dict
+          Lista con los parámetros de polarimetría calculados para cada par.
+    """
+    # Primero, procesar las 4 imágenes con el método existente
+    final_image_paths, results = process_four_polarimetric_images(ref_path, other_paths, pol_angles,
+                                                                   fwhm=fwhm,
+                                                                   threshold_multiplier=threshold_multiplier,
+                                                                   tol_distance=tol_distance,
+                                                                   tol_angle=tol_angle,
+                                                                   max_distance=max_distance)
+    # Supongamos que la imagen de referencia es la primera de results.
+    # Se extraen 'sources' y 'final_pairs' desde la primera imagen.
+    # Cada elemento de results es una tupla:
+    # (image_data, sources, candidate_pairs, final_pairs, mode_distance, mode_angle)
+    if not results:
+        raise ValueError("No se obtuvieron resultados del procesamiento de imágenes.")
+    
+    ref_result = results[0]
+    sources = ref_result[1]
+    final_pairs = ref_result[3]
+    
+    # Llamar al método de fotometría que calcula los parámetros de polarimetría para los pares
+    # Este método debe estar definido en tu librería, por ejemplo: compute_polarimetry_for_pairs
+    polarimetry_results = compute_polarimetry_for_pairs(final_image_paths, sources, final_pairs,
+                                                        aperture_radius=phot_aperture_radius,
+                                                        r_in=r_in, r_out=r_out,
+                                                        SNR_threshold=SNR_threshold)
+    return polarimetry_results

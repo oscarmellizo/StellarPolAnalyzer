@@ -20,7 +20,8 @@ setup(
         'photutils',
         'scikit-learn',
         'scikit-image',
-        'scipy'
+        'scipy',
+        'skimage'
     ],
     license='Apache License 2.0',
     classifiers=[
