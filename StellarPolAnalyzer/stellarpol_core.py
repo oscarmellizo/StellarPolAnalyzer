@@ -19,6 +19,8 @@ from astropy.stats import sigma_clipped_stats
 from sklearn.neighbors import NearestNeighbors
 from matplotlib.patches import Circle
 from collections import Counter
+from skimage.registration import phase_cross_correlation
+from scipy.ndimage import shift
 
 def detect_stars(image_data, fwhm=3.0, threshold_multiplier=5.0):
     """
@@ -163,7 +165,7 @@ def write_candidate_pairs_to_file(candidate_pairs, filename="candidate_pairs.txt
             f.write(f"{i}\t{j}\t{d:.2f}\t{a:.2f}\n")
     print(f"Se han escrito {len(candidate_pairs)} candidatos en el archivo '{filename}'.")
 
-def process_image(image_path, fwhm=3.0, threshold_multiplier=5.0, tol_distance=0.52, tol_angle=0.30, max_distance=75):
+def process_image(image_path, fwhm=3.0, threshold_multiplier=5.0, tol_distance=0.52, tol_angle=0.30, max_distance=50):
     """Procesa la imagen y retorna los resultados."""
     with fits.open(image_path) as hdul:
         image_data = hdul[0].data
@@ -171,6 +173,27 @@ def process_image(image_path, fwhm=3.0, threshold_multiplier=5.0, tol_distance=0
     candidate_pairs = find_candidate_pairs(sources, max_distance=max_distance)
     final_pairs, mode_distance, mode_angle = filter_pairs_by_mode(candidate_pairs, tol_distance=tol_distance, tol_angle=tol_angle)
     return image_data, sources, candidate_pairs, final_pairs, mode_distance, mode_angle
+
+
+def align_images(reference_image, image_to_align):
+    """
+    Calcula la traslación necesaria para alinear image_to_align con reference_image
+    utilizando phase_cross_correlation y luego aplica la traslación con scipy.ndimage.shift.
+    Retorna la imagen alineada y el vector de desplazamiento.
+    """
+    shift_estimation, error, diffphase = phase_cross_correlation(reference_image, image_to_align, upsample_factor=10)
+    aligned_image = shift(image_to_align, shift=shift_estimation)
+    return aligned_image, shift_estimation
+
+def save_fits_with_same_headers(original_filename, new_image, output_filename):
+    """
+    Guarda la imagen en un nuevo archivo FITS conservando el header original.
+    """
+    with fits.open(original_filename) as hdul:
+        header = hdul[0].header
+    hdu = fits.PrimaryHDU(data=new_image, header=header)
+    hdu.writeto(output_filename, overwrite=True)
+    print(f"Se ha guardado el archivo: {output_filename}")
 
 if __name__ == '__main__':
     image_path = 'caf-20231114-22_35_48-sci-blap_b_f.fits'
