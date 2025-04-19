@@ -35,7 +35,8 @@ def annotate_with_astrometry_net(ref_path, sources, final_pairs, polarimetry_res
         syn += g(xx,yy)
     syn_hdr = fits.Header({k:hdr[k] for k in ('RA','DEC','OBJECT') if k in hdr})
     fits.PrimaryHDU(syn,header=syn_hdr).writeto(synthetic_name,overwrite=True)
-    ast = AstrometryNet(api_key=api_key)
+    ast = AstrometryNet()
+    ast.api_key = api_key
     sol = ast.solve_from_image(synthetic_name)
     wcs_hdr = fits.Header(sol)
     wcs = WCS(wcs_hdr)
