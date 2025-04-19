@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name='StellarPolAnalyzer',
-    version='0.1.5',
+    version='0.1.10',
     description='Librería para análisis de imágenes polarimétricas y detección de parejas de estrellas',
     author='Oscar Mellizo Angulo',
     author_email='omellizo@gmail.com',
@@ -21,7 +21,7 @@ setup(
         'scikit-learn',
         'scikit-image',
         'scipy',
-        'skimage'
+        'astroquery'
     ],
     license='Apache License 2.0',
     classifiers=[

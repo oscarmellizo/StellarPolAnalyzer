@@ -11,13 +11,18 @@ Se incluyen funciones para:
 """
 
 import numpy as np
+import astropy.units as u
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval
 from astropy.stats import sigma_clipped_stats
+from astropy.modeling.models import Gaussian2D
+from astropy.wcs import WCS
+from astropy import coordinates as coord
+from astroquery.astrometry_net import AstrometryNet
+from astroquery.simbad import Simbad
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
-from photutils import DAOStarFinder
-from photutils import CircularAperture, CircularAnnulus, aperture_photometry, ApertureStats
+from photutils import DAOStarFinder, CircularAperture, CircularAnnulus, aperture_photometry, ApertureStats
 from sklearn.neighbors import NearestNeighbors
 from skimage.registration import phase_cross_correlation
 from scipy.ndimage import shift
@@ -411,7 +416,7 @@ def compute_polarimetry_for_pairs(final_image_paths, sources, final_pairs,
     
     return polarimetry_results
 
-def compute_full_polarimetry(ref_path, other_paths, pol_angles,
+def compute_full_polarimetry(ref_path, other_paths,
                              fwhm=3.0, threshold_multiplier=5.0,
                              tol_distance=0.52, tol_angle=0.30, max_distance=75,
                              phot_aperture_radius=5, r_in=7, r_out=10, SNR_threshold=5):
@@ -424,9 +429,6 @@ def compute_full_polarimetry(ref_path, other_paths, pol_angles,
           Path de la imagen de referencia (por ejemplo, la imagen a 0°).
       - other_paths: list of strings
           Lista de paths de las otras 3 imágenes (por ejemplo, las tomadas a 22.5°, 45° y 67.5°).
-      - pol_angles: list of floats
-          Lista de ángulos de polarización correspondientes a las 4 imágenes. El orden debe coincidir
-          con [ref_path] + other_paths.
       - fwhm: float (default=3.0)
           Parámetro FWHM para la detección de estrellas.
       - threshold_multiplier: float (default=5.0)
@@ -462,11 +464,15 @@ def compute_full_polarimetry(ref_path, other_paths, pol_angles,
          con los parámetros de polarimetría (q, u, P, theta, errores, etc.) para cada par.
 
     Retorna:
+      - process_four_polarimetric_images_results: list
+          Lista con los resultados de `process_image` para cada imagen.
       - polarimetry_results: list of dict
           Lista con los parámetros de polarimetría calculados para cada par.
+      - final_image_paths: list of strings
+          Lista de paths de las imágenes finales (la de referencia y las 3 alineadas).
     """
     # Primero, procesar las 4 imágenes con el método existente
-    final_image_paths, results = process_four_polarimetric_images(ref_path, other_paths, pol_angles,
+    final_image_paths, process_four_polarimetric_images_results = process_four_polarimetric_images(ref_path, other_paths,
                                                                    fwhm=fwhm,
                                                                    threshold_multiplier=threshold_multiplier,
                                                                    tol_distance=tol_distance,
@@ -476,10 +482,10 @@ def compute_full_polarimetry(ref_path, other_paths, pol_angles,
     # Se extraen 'sources' y 'final_pairs' desde la primera imagen.
     # Cada elemento de results es una tupla:
     # (image_data, sources, candidate_pairs, final_pairs, mode_distance, mode_angle)
-    if not results:
+    if not process_four_polarimetric_images_results:
         raise ValueError("No se obtuvieron resultados del procesamiento de imágenes.")
     
-    ref_result = results[0]
+    ref_result = process_four_polarimetric_images_results[0]
     sources = ref_result[1]
     final_pairs = ref_result[3]
     
@@ -489,4 +495,196 @@ def compute_full_polarimetry(ref_path, other_paths, pol_angles,
                                                         aperture_radius=phot_aperture_radius,
                                                         r_in=r_in, r_out=r_out,
                                                         SNR_threshold=SNR_threshold)
-    return polarimetry_results
+    return process_four_polarimetric_images_results, polarimetry_results, final_image_paths
+
+def annotate_with_astrometry_net(ref_path, sources, final_pairs, polarimetry_results,
+                                 fwhm=3.0, api_key=None, simbad_radius=0.01*u.deg,
+                                 synthetic_name="synthetic.fits"):
+    """
+    A partir de los resultados de compute_full_polarimetry:
+      - genera una imagen sintética con Gaussian2D en las posiciones ordinarias
+        de cada par (con amplitud = suma de flujos ord+ext en 0°),
+      - guarda el FITS sintético,
+      - lo resuelve con Astrometry.Net,
+      - convierte esas posiciones pixel -> sky,
+      - consulta SIMBAD para cada coordenada,
+      - y anota en cada dict de polarimetry_results los campos:
+         'ra', 'dec', 'simbad_id'.
+
+    Parámetros
+    ----------
+    ref_path : str
+        Path al FITS de referencia (0°), se usa su header para tamaño y metadatos.
+    sources : list/Table
+        Fuentes detectadas en esa imagen, con campos 'xcentroid','ycentroid'.
+    final_pairs : list of tuples
+        Lista de pares (i, j, dist, ang) según compute_full_polarimetry.
+    polarimetry_results : list of dict
+        Salida de compute_polarimetry_for_pairs, cada dict debe incluir:
+          - 'pair_index'  → índice en final_pairs,
+          - 'fluxes'[0.0]['ord_flux'] y ['ext_flux'].
+    fwhm : float
+        FWHM (px) para convertir a sigma y generar los Gaussianos.
+    api_key : str
+        Tu API key de Astrometry.Net.
+    simbad_radius : Quantity
+        Radio de búsqueda en SIMBAD alrededor de cada posición resuelta.
+    synthetic_name : str
+        Nombre de archivo donde se escribirá el FITS sintético.
+
+    Retorna
+    -------
+    wcs : astropy.wcs.WCS
+        La solución WCS obtenida de Astrometry.Net.
+    enriched_results : list of dict
+        Mismo lista de polarimetry_results, pero cada dict ahora incluye:
+          - 'ra', 'dec'        : coordenadas ICRS en grados,
+          - 'simbad_id'        : nombre SIMBAD o "No_ID".
+    """
+    # 1) Leemos header de la imagen de referencia
+    with fits.open(ref_path) as hdul:
+        hdr = hdul[0].header
+    nx = hdr['NAXIS1']; ny = hdr['NAXIS2']
+    
+    # 2) Convertir FWHM a sigma
+    sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+    
+    # 3) Construir la imagen sintética
+    syn = np.zeros((ny, nx))
+    positions = []
+    for entry in polarimetry_results:
+        idx = entry['pair_index']
+        i, j, _, _ = final_pairs[idx]
+        x = sources[i]['xcentroid']
+        y = sources[i]['ycentroid']
+        positions.append((x, y))
+        # amplitud = suma de ord + ext en 0°
+        amp = entry['fluxes'][0.0]['ord_flux'] + entry['fluxes'][0.0]['ext_flux']
+        g = Gaussian2D(amplitude=amp, x_mean=x, y_mean=y,
+                       x_stddev=sigma, y_stddev=sigma)
+        y_grid, x_grid = np.mgrid[0:ny, 0:nx]
+        syn += g(x_grid, y_grid)
+    
+    # 4) Guardar FITS sintético
+    syn_hdr = fits.Header()
+    for key in ('RA','DEC','OBJECT'):
+        if key in hdr:
+            syn_hdr[key] = hdr[key]
+    fits.PrimaryHDU(syn, header=syn_hdr).writeto(synthetic_name, overwrite=True)
+    
+    # 5) Resolver con Astrometry.Net
+    ast = AstrometryNet()
+    ast.api_key = api_key
+    sol = ast.solve_from_image(synthetic_name)
+    wcs_hdr = fits.Header()
+    for k,v in sol.items():
+        wcs_hdr[k] = v
+    wcs = WCS(wcs_hdr)
+    
+    # 6) Pixel → sky
+    pix = np.array(positions)
+    world = wcs.all_pix2world(pix, 1)  # array Nx2: [ra,dec]
+    
+    # 7) Consultar SIMBAD para cada coordenada
+    Simbad.reset_votable_fields()
+    Simbad.add_votable_fields('otype')
+    enriched = []
+    for entry, (ra, dec) in zip(polarimetry_results, world):
+        sc = coord.SkyCoord(ra=ra*u.deg, dec=dec*u.deg, frame='icrs')
+        res = Simbad.query_region(sc, radius=simbad_radius)
+        if res and len(res)>0:
+            obj = res['MAIN_ID'][0].decode('utf-8') if isinstance(res['MAIN_ID'][0], bytes) else res['MAIN_ID'][0]
+        else:
+            obj = "No_ID"
+        e = entry.copy()
+        e['ra'] = ra
+        e['dec'] = dec
+        e['simbad_id'] = obj
+        enriched.append(e)
+    
+    return wcs, enriched
+
+def run_complete_polarimetric_pipeline(ref_path,
+                                        other_paths,
+                                        pol_angles,
+                                        fwhm=3.0,
+                                        threshold_multiplier=5.0,
+                                        tol_distance=0.52,
+                                        tol_angle=0.30,
+                                        max_distance=75,
+                                        phot_aperture_radius=5,
+                                        r_in=7,
+                                        r_out=10,
+                                        SNR_threshold=5,
+                                        astrometry_api_key=None,
+                                        simbad_radius=0.01*u.deg,
+                                        synthetic_name="synthetic.fits"):
+    """
+    Ejecuta en secuencia todo el flujo de trabajo polarimétrico y de astrometría:
+      1) Alinea y procesa las 4 imágenes polarimétricas, detecta fuentes y empareja estrellas.
+      2) Realiza la fotometría sobre cada par y calcula q, u, P y theta.
+      3) Crea una imagen sintética de las componentes ordinarias de cada par.
+      4) Envía la sintética a Astrometry.Net, resuelve WCS y actualiza header.
+      5) Convierte las posiciones pixel → sky y consulta SIMBAD para anotar nombres.
+
+    Parámetros
+    ----------
+    ref_path : str
+        Path de la imagen de referencia (por ejemplo, la de 0°).
+    other_paths : list of str
+        Paths de las otras 3 imágenes.
+    pol_angles : list of float
+        Ángulos de polarización en grados [0°, 22.5°, 45°, 67.5°].
+    fwhm, threshold_multiplier, tol_distance, tol_angle, max_distance : float
+        Parámetros para el emparejamiento de estrellas.
+    phot_aperture_radius, r_in, r_out, SNR_threshold : float
+        Parámetros para la fotometría de cada par.
+    astrometry_api_key : str
+        API key para Astrometry.Net (si None, no resuelve).
+    simbad_radius : Quantity
+        Radio para consulta SIMBAD.
+    synthetic_name : str
+        Nombre de fichero FITS sintético.
+
+    Retorna
+    -------
+    final_image_paths : list of str
+        Paths de las 4 imágenes procesadas (alineadas) usadas.
+    polar_results : list of dict
+        Lista con q, u, P, theta, errores y flujos para cada par.
+    wcs : astropy.wcs.WCS
+        Solución WCS obtenida de Astrometry.Net.
+    enriched_results : list of dict
+        Lista `polar_results` enriquecida con 'ra', 'dec' y 'simbad_id' por par.
+    """
+    # Paso 1–2: polarimetría
+    proc_results, polar_results, final_image_paths = compute_full_polarimetry(
+        ref_path,
+        other_paths,
+        fwhm=fwhm,
+        threshold_multiplier=threshold_multiplier,
+        tol_distance=tol_distance,
+        tol_angle=tol_angle,
+        max_distance=max_distance,
+        phot_aperture_radius=phot_aperture_radius,
+        r_in=r_in,
+        r_out=r_out,
+        SNR_threshold=SNR_threshold
+    )
+
+    # Extraer sources y final_pairs desde el resultado de la imagen de referencia
+    _, sources, _, final_pairs, _, _ = proc_results[0]
+
+    # Paso 3–5: astrometría + SIMBAD
+    wcs, enriched = annotate_with_astrometry_net(
+        ref_path,
+        sources,
+        final_pairs,
+        polar_results,
+        fwhm=fwhm,
+        api_key=astrometry_api_key,
+        simbad_radius=simbad_radius,
+        synthetic_name=synthetic_name
+    )
+
+    return final_image_paths, polar_results, wcs, enriched
