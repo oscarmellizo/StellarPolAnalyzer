@@ -21,7 +21,7 @@ Key formulae:
 import os
 import numpy as np
 from astropy.io import fits
-from photutils import CircularAperture, CircularAnnulus, aperture_photometry, ApertureStats
+from photutils.aperture import CircularAperture, CircularAnnulus, aperture_photometry, ApertureStats
 import matplotlib.pyplot as plt
 
 

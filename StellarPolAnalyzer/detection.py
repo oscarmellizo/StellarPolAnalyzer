@@ -14,7 +14,7 @@ Provides:
 import numpy as np
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
-from photutils import DAOStarFinder
+from photutils.detection import DAOStarFinder
 
 
 def detect_stars(image_data, fwhm=3.0, threshold_multiplier=5.0):

@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from astropy.visualization import ZScaleInterval
 import numpy as np
-from photutils import CircularAperture, CircularAnnulus
+from photutils.aperture import CircularAperture, CircularAnnulus
 
 
 def draw_pairs(

@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name='StellarPolAnalyzer',
-    version='0.1.15',
+    version='0.1.19',
     description='Librería Python que automatiza un completo un pipeline polarimétrico sobre imágenes FITS astronómicas: Empareja, fotometriza y astrometriza imágenes polarimétricas de campo estelar en un solo flujo.',
     author='Oscar Mellizo Angulo',
     author_email='omellizo@gmail.com',
@@ -21,7 +21,8 @@ setup(
         'scikit-learn',
         'scikit-image',
         'scipy',
-        'astroquery'
+        'astroquery',
+        'reportlab'
     ],
     license='Apache License 2.0',
     classifiers=[

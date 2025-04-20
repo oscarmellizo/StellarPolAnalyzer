@@ -38,6 +38,7 @@ from .alignment import align_images, save_fits_with_same_headers
 from .photometry import compute_polarimetry_for_pairs
 from .astrometry import annotate_with_astrometry_net
 from .visualization import draw_pairs, save_plot, draw_apertures, plot_polarization_errors
+from .report import generate_pdf_report
 
 
 def compute_full_polarimetry(
@@ -111,7 +112,7 @@ def compute_full_polarimetry(
     ref_data = fits.getdata(ref_path)
     if save_plots and report_dir:
         save_plot(ref_data, os.path.basename(ref_path), report_dir,
-                  title="Reference Image", filename_suffix="_refimg")
+                  title="Reference Image", filename_suffix="_ref_img")
 
     # Step 1 & 2: alignment
     final_paths = [ref_path]
@@ -295,4 +296,10 @@ def run_complete_polarimetric_pipeline(
     with open('pipeline_results.json', 'w', encoding='utf-8') as f:
         json.dump(elementos, f, indent=4, ensure_ascii=False)
 
+    generate_pdf_report(
+        report_dir=report_dir,
+        output_pdf="reports/Polarimetric_Report.pdf",
+        polar_results=polar_results,
+        enriched_results=enriched
+    )
     return final_paths, polar_results, wcs, enriched
