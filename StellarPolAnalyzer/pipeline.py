@@ -31,12 +31,13 @@ final_paths, polar_results, wcs, enriched = run_complete_polarimetric_pipeline(
 """
 import os
 import astropy.units as u
+import json
 from astropy.io import fits
 from .detection import process_image
 from .alignment import align_images, save_fits_with_same_headers
 from .photometry import compute_polarimetry_for_pairs
 from .astrometry import annotate_with_astrometry_net
-from .visualization import draw_pairs, save_plot
+from .visualization import draw_pairs, save_plot, draw_apertures, plot_polarization_errors
 
 
 def compute_full_polarimetry(
@@ -140,6 +141,15 @@ def compute_full_polarimetry(
         process_results.append(result)
         if save_plots and report_dir:
             img_data, sources, _, pairs, d_mode, a_mode = result
+            draw_apertures(
+                image_data=img_data,
+                sources=sources,
+                aperture_radius=phot_aperture_radius,
+                annulus_radii=(r_in, r_out),
+                original_name=os.path.basename(path),
+                filename_suffix='_apertures',
+                report_dir=report_dir
+            )
             draw_pairs(
                 img_data,
                 sources,
@@ -163,8 +173,18 @@ def compute_full_polarimetry(
         aperture_radius=phot_aperture_radius,
         r_in=r_in,
         r_out=r_out,
-        SNR_threshold=SNR_threshold
+        SNR_threshold=SNR_threshold,
+        save_histogram=save_plots, 
+        report_dir=report_dir, 
+        hist_filename="snr_hist.png"
     )
+    
+    if save_plots and report_dir:
+        plot_polarization_errors(
+            polar_results,
+            report_dir,
+            filename="polar_errors.png"
+        )
 
     return process_results, polar_results, final_paths
 
@@ -269,5 +289,10 @@ def run_complete_polarimetric_pipeline(
                   report_dir,
                   title="Synthetic Image",
                   filename_suffix="_syn")
+
+    # 4) Put results in a JSON file
+    elementos = [s for s in enriched]
+    with open('pipeline_results.json', 'w', encoding='utf-8') as f:
+        json.dump(elementos, f, indent=4, ensure_ascii=False)
 
     return final_paths, polar_results, wcs, enriched

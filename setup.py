@@ -5,8 +5,8 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name='StellarPolAnalyzer',
-    version='0.1.14',
-    description='Librería para análisis de imágenes polarimétricas y detección de parejas de estrellas',
+    version='0.1.15',
+    description='Librería Python que automatiza un completo un pipeline polarimétrico sobre imágenes FITS astronómicas: Empareja, fotometriza y astrometriza imágenes polarimétricas de campo estelar en un solo flujo.',
     author='Oscar Mellizo Angulo',
     author_email='omellizo@gmail.com',
     long_description=long_description,
