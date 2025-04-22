@@ -37,7 +37,7 @@ from .detection import process_image
 from .alignment import align_images, save_fits_with_same_headers
 from .photometry import compute_polarimetry_for_pairs
 from .astrometry import annotate_with_astrometry_net
-from .visualization import draw_pairs, save_plot, draw_apertures, plot_polarization_errors
+from .visualization import draw_pairs, save_plot, draw_apertures, plot_polarization_errors, plot_polarization_map, plot_histogram_P, plot_histogram_theta, plot_qu_diagram
 from .report import generate_pdf_report
 
 
@@ -112,7 +112,7 @@ def compute_full_polarimetry(
     ref_data = fits.getdata(ref_path)
     if save_plots and report_dir:
         save_plot(ref_data, os.path.basename(ref_path), report_dir,
-                  title="Reference Image", filename_suffix="_ref_img")
+                  title="Reference Image " + ref_path, filename_suffix="_ref_img")
 
     # Step 1 & 2: alignment
     final_paths = [ref_path]
@@ -124,9 +124,9 @@ def compute_full_polarimetry(
         final_paths.append(out_fits)
         if save_plots and report_dir:
             save_plot(img_data, os.path.basename(path), report_dir,
-                      title="Original Image", filename_suffix="_orig")
+                      title="Original Image " + path, filename_suffix="_orig")
             save_plot(aligned, os.path.basename(path), report_dir,
-                      title="Aligned Image", filename_suffix="_aligned")
+                      title="Aligned Image " + path, filename_suffix="_aligned")
 
     # Step 3: detect & pair
     process_results = []
@@ -285,11 +285,38 @@ def run_complete_polarimetric_pipeline(
     # 3) Save synthetic image (optional)
     if save_plots and report_dir:
         syn_data = fits.getdata(synthetic_name)
+        # 1. Imagen syntetica
         save_plot(syn_data,
                   os.path.basename(synthetic_name),
                   report_dir,
                   title="Synthetic Image",
                   filename_suffix="_syn")
+        # 2. Mapa de polarización
+        plot_polarization_map(
+            ref_path,
+            enriched,
+            wcs,
+            report_dir,
+            filename="polarization_map.png"
+        )
+        # 3. Histograma de P
+        plot_histogram_P(
+            enriched,
+            report_dir,
+            filename="histogram_P.png"
+        )
+        # 4. Histograma de θ
+        plot_histogram_theta(
+            enriched,
+            report_dir,
+            filename="histogram_theta.png"
+        )
+        # 5. Diagrama Q–U
+        plot_qu_diagram(
+            enriched,
+            report_dir,
+            filename="diagram_qu.png"
+        )
 
     # 4) Put results in a JSON file
     elementos = [s for s in enriched]

@@ -43,6 +43,7 @@ StellarPolAnalyzer/
 ├─ visualization.py        # Funciones de dibujo y guardado de plots
 ├─ pipeline.py             # compute_full_polarimetry + run_complete_pipeline
 ├─ utils.py                # Utilidades (exportar pares a TXT)
+├─ report.py               # Utilidad para crear un reporte del proceso
 └─ __init__.py             # API pública
 ```
 
