@@ -153,13 +153,14 @@ def generate_pdf_report(report_dir, output_pdf, polar_results, enriched_results)
     _add_section("5. Astrometría — Imagen sintética", syn_img)
 
     story.append(Paragraph("5. Astrometría — Resultados SIMBAD", h2))
-    astro_data = [["Par", "RA (°)", "DEC (°)", "Simbad ID"]]
+    astro_data = [["Par", "RA (°)", "DEC (°)", "Simbad ID", "Object Type"]]
     for entry in enriched_results:
         astro_data.append([
             entry["pair_index"],
             f"{entry['ra']:.6f}",
             f"{entry['dec']:.6f}",
-            entry["simbad_id"]
+            entry["simbad_id"],
+            entry["object_type"]
         ])
     astro_table = Table(astro_data, hAlign="LEFT")
     astro_table.setStyle(TableStyle([

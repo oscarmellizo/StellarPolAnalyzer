@@ -137,6 +137,7 @@ def draw_pairs(
 
 def save_plot(
     data,
+    origin,
     original_name,
     report_dir,
     title=None,
@@ -174,8 +175,8 @@ def save_plot(
     interval = ZScaleInterval()
     vmin, vmax = interval.get_limits(data)
 
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.imshow(data, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.imshow(data, cmap='gray', origin=origin, vmin=vmin, vmax=vmax)
     ax.set_title(plot_title)
     ax.set_xlabel('X [px]')
     ax.set_ylabel('Y [px]')

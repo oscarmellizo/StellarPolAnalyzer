@@ -111,7 +111,7 @@ def compute_full_polarimetry(
     # Step 1: reference image
     ref_data = fits.getdata(ref_path)
     if save_plots and report_dir:
-        save_plot(ref_data, os.path.basename(ref_path), report_dir,
+        save_plot(ref_data, 'lower', os.path.basename(ref_path), report_dir,
                   title="Reference Image " + ref_path, filename_suffix="_ref_img")
 
     # Step 1 & 2: alignment
@@ -123,9 +123,9 @@ def compute_full_polarimetry(
         save_fits_with_same_headers(path, aligned, out_fits)
         final_paths.append(out_fits)
         if save_plots and report_dir:
-            save_plot(img_data, os.path.basename(path), report_dir,
+            save_plot(img_data, 'lower', os.path.basename(path), report_dir,
                       title="Original Image " + path, filename_suffix="_orig")
-            save_plot(aligned, os.path.basename(path), report_dir,
+            save_plot(aligned, 'lower', os.path.basename(path), report_dir,
                       title="Aligned Image " + path, filename_suffix="_aligned")
 
     # Step 3: detect & pair
@@ -252,6 +252,9 @@ def run_complete_polarimetric_pipeline(
     enriched : list of dict
         Polarimetric results augmented with 'ra', 'dec', and 'simbad_id' per pair.
     """
+    
+    report_directory_assets = report_dir + "/assets"
+    
     # 1) Polarimetric processing
     process_results, polar_results, final_paths = compute_full_polarimetry(
         ref_path,
@@ -266,10 +269,11 @@ def run_complete_polarimetric_pipeline(
         r_out=r_out,
         SNR_threshold=SNR_threshold,
         save_plots=save_plots,
-        report_dir=report_dir
+        report_dir=report_directory_assets
     )
 
     # 2) Astrometry + SIMBAD annotation
+    synthetic_path_name = report_dir + '/' + synthetic_name
     _, sources, _, final_pairs, _, _ = process_results[0]
     wcs, enriched = annotate_with_astrometry_net(
         ref_path,
@@ -279,53 +283,50 @@ def run_complete_polarimetric_pipeline(
         fwhm=fwhm,
         api_key=astrometry_api_key,
         simbad_radius=simbad_radius,
-        synthetic_name=synthetic_name
+        synthetic_name=synthetic_path_name
     )
 
     # 3) Save synthetic image (optional)
     if save_plots and report_dir:
-        syn_data = fits.getdata(synthetic_name)
+        syn_data = fits.getdata(synthetic_path_name)
         # 1. Imagen syntetica
-        save_plot(syn_data,
-                  os.path.basename(synthetic_name),
-                  report_dir,
-                  title="Synthetic Image",
-                  filename_suffix="_syn")
+        save_plot(syn_data, 'upper', os.path.basename(synthetic_path_name), report_directory_assets,
+                  title="Synthetic Image", filename_suffix="_syn")
         # 2. Mapa de polarización
         plot_polarization_map(
             ref_path,
             enriched,
             wcs,
-            report_dir,
+            report_directory_assets,
             filename="polarization_map.png"
         )
         # 3. Histograma de P
         plot_histogram_P(
             enriched,
-            report_dir,
+            report_directory_assets,
             filename="histogram_P.png"
         )
         # 4. Histograma de θ
         plot_histogram_theta(
             enriched,
-            report_dir,
+            report_directory_assets,
             filename="histogram_theta.png"
         )
         # 5. Diagrama Q–U
         plot_qu_diagram(
             enriched,
-            report_dir,
+            report_directory_assets,
             filename="diagram_qu.png"
         )
 
     # 4) Put results in a JSON file
     elementos = [s for s in enriched]
-    with open('pipeline_results.json', 'w', encoding='utf-8') as f:
+    with open(report_dir + '/pipeline_results.json', 'w', encoding='utf-8') as f:
         json.dump(elementos, f, indent=4, ensure_ascii=False)
 
     generate_pdf_report(
-        report_dir=report_dir,
-        output_pdf="reports/Polarimetric_Report.pdf",
+        report_dir=report_directory_assets,
+        output_pdf=report_dir + "/Polarimetric_Report.pdf",
         polar_results=polar_results,
         enriched_results=enriched
     )
