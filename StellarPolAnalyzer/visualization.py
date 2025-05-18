@@ -326,13 +326,23 @@ def plot_polarization_map(
     data = fits.getdata(ref_fits_path)
     vmin, vmax = ZScaleInterval().get_limits(data)
 
-    ras = np.array([e['ra'] for e in polar_results])
-    decs = np.array([e['dec'] for e in polar_results])
-    Ps = np.array([e['P'] for e in polar_results])
-    thetas = np.array([e['theta'] for e in polar_results])
+    valid = [e for e in polar_results 
+             if isinstance(e.get('ra'), (int, float)) 
+             and isinstance(e.get('dec'), (int, float))]
+    if not valid:
+        raise RuntimeError("No hay coordenadas válidas RA/DEC para trazar el mapa.")
 
-    sky = SkyCoord(ras * u.deg, decs * u.deg, frame='icrs')
-    xs, ys = wcs.world_to_pixel(sky)
+    ras    = np.array([e['ra']    for e in valid], dtype=float)
+    decs   = np.array([e['dec']   for e in valid], dtype=float)
+    Ps     = np.array([e['P']     for e in valid], dtype=float)
+    thetas = np.array([e['theta'] for e in valid], dtype=float)
+
+    try:
+        sky = SkyCoord(ra=ras * u.deg, dec=decs * u.deg, frame='icrs')
+        xs, ys = wcs.world_to_pixel(sky)
+    except Exception:
+        xs, ys = wcs.world_to_pixel_values(ras, decs)
+        
     us = Ps * np.cos(np.deg2rad(thetas))
     vs = Ps * np.sin(np.deg2rad(thetas))
 

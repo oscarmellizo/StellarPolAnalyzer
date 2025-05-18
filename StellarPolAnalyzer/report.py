@@ -146,7 +146,7 @@ def generate_pdf_report(report_dir, output_pdf, polar_results, enriched_results)
     apertures = sorted(glob.glob(os.path.join(report_dir, "*_apertures.png")))
     _add_section("4. Fotometría — Aperturas", apertures)
     snr_hist = sorted(glob.glob(os.path.join(report_dir, "*snr_hist.png")))
-    _add_section("4. Fotometría — Histograma de SNR", snr_hist)
+    _add_section("4. Fotometría — Histograma de SNR", snr_hist, h1, width=600, height=500)
 
     # 5. Astrometry: synthetic image + SIMBAD table
     syn_img = sorted(glob.glob(os.path.join(report_dir, "*_syn.png")))
@@ -155,12 +155,17 @@ def generate_pdf_report(report_dir, output_pdf, polar_results, enriched_results)
     story.append(Paragraph("5. Astrometría — Resultados SIMBAD", h2))
     astro_data = [["Par", "RA (°)", "DEC (°)", "Simbad ID", "Object Type"]]
     for entry in enriched_results:
+        # si ra o dec es None, usamos "N/A"
+        ra_str = f"{entry['ra']:.6f}" if entry.get('ra') is not None else "N/A"
+        dec_str = f"{entry['dec']:.6f}" if entry.get('dec') is not None else "N/A"
+        simbad = entry.get('simbad_id', "No_ID")
+        object_type = entry.get('object_type', "No_Object_Type")
         astro_data.append([
             entry["pair_index"],
-            f"{entry['ra']:.6f}",
-            f"{entry['dec']:.6f}",
-            entry["simbad_id"],
-            entry["object_type"]
+            ra_str,
+            dec_str,
+            simbad,
+            object_type
         ])
     astro_table = Table(astro_data, hAlign="LEFT")
     astro_table.setStyle(TableStyle([
