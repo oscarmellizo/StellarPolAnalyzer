@@ -51,7 +51,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 
 
-def generate_pdf_report(report_dir, output_pdf, polar_results, enriched_results):
+def generate_pdf_report(report_dir, output_pdf, polar_results, ism_params, enriched_results):
     """
     Assemble a PDF report from pipeline diagnostics and measurement tables.
 
@@ -152,7 +152,7 @@ def generate_pdf_report(report_dir, output_pdf, polar_results, enriched_results)
     syn_img = sorted(glob.glob(os.path.join(report_dir, "*_syn.png")))
     _add_section("5. Astrometría — Imagen sintética", syn_img)
 
-    story.append(Paragraph("5. Astrometría — Resultados SIMBAD", h2))
+    story.append(Paragraph("5. Astrometría — Resultados SIMBAD", h1))
     astro_data = [["Par", "RA (°)", "DEC (°)", "Simbad ID", "Object Type"]]
     for entry in enriched_results:
         # si ra o dec es None, usamos "N/A"
@@ -175,25 +175,67 @@ def generate_pdf_report(report_dir, output_pdf, polar_results, enriched_results)
     story.append(astro_table)
     story.append(PageBreak())
 
-    # 6. Polarimetry: parameters table, map, histograms, Q–U diagram
-    story.append(Paragraph("6. Polarimetría — Tabla de parámetros", h2))
-    polar_data = [["Par", "q (%)", "u (%)", "P (%)", "θ (°)", "Error (%)"]]
-    for entry in polar_results:
-        polar_data.append([
-            entry["pair_index"],
-            f"{entry['q']:.2f}",
-            f"{entry['u']:.2f}",
-            f"{entry['P']:.2f}",
-            f"{entry['theta']:.2f}",
-            f"{entry['error']:.2f}"
-        ])
-    polar_table = Table(polar_data, hAlign="LEFT")
-    polar_table.setStyle(TableStyle([
+    # 6. Polarimetry: Estimate interstellar (ISM) polarization from high-SNR q,u distributions
+    story.append(Paragraph("6. Polarimetría — Estimación Interestelar (ISM)", h1))
+
+    # extraemos todos los parámetros
+    q_means   = ism_params['ism_estimation']['q_means']
+    q_sigmas  = ism_params['ism_estimation']['q_sigmas']
+    q_weights = ism_params['ism_estimation']['q_weights']
+    u_means   = ism_params['ism_estimation']['u_means']
+    u_sigmas  = ism_params['ism_estimation']['u_sigmas']
+    u_weights = ism_params['ism_estimation']['u_weights']
+    dominant_q = ism_params['ism_estimation']['dominant_q']
+    dominant_u = ism_params['ism_estimation']['dominant_u']
+
+    # Preparamos la tabla: encabezados
+    ism_data = [[
+        "Comp.",
+        "Q mean", "Q σ", "Q weight",
+        "U mean", "U σ", "U weight",
+        "Dominante Q", "Dominante U"
+    ]]
+
+    # Rellenamos filas por cada componente
+    n_comp = max(len(q_means), len(u_means))
+    for i in range(n_comp):
+        mu_q   = q_means[i]
+        sig_q  = q_sigmas[i]
+        w_q    = q_weights[i]
+        mu_u   = u_means[i]
+        sig_u  = u_sigmas[i]
+        w_u    = u_weights[i]
+
+        # Función auxiliar
+        def fmt(x, fmt_str):
+            return fmt_str.format(x) if isinstance(x, (int, float)) else str(x)
+        
+        row = [
+            str(i),
+            fmt(mu_q, "{:.3f}"),
+            fmt(sig_q, "{:.3f}"),
+            fmt(w_q, "{:.2f}"),
+            fmt(mu_u, "{:.3f}"),
+            fmt(sig_u, "{:.3f}"),
+            fmt(w_u, "{:.2f}"),
+            "✔" if i == dominant_q else "",
+            "✔" if i == dominant_u else ""
+        ]
+        ism_data.append(row)
+
+    # Dibujamos la tabla
+    ism_table = Table(ism_data, hAlign="LEFT")
+    ism_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("TEXTCOLOR",  (0, 0), (-1, 0), colors.black),
+        ("ALIGN",      (0, 0), (-1, -1), "CENTER"),
+        ("GRID",       (0, 0), (-1, -1), 0.5, colors.grey),
+        ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME",   (0, 1), (-1, -1), "Helvetica"),
     ]))
-    story.append(polar_table)
+    story.append(ism_table)
     story.append(Spacer(1, 12))
+
 
     # 6.2 Polarization map
     vec_map = sorted(glob.glob(os.path.join(report_dir, "*_map.png")))
@@ -208,6 +250,89 @@ def generate_pdf_report(report_dir, output_pdf, polar_results, enriched_results)
     # 6.4 Q–U diagram
     qu = sorted(glob.glob(os.path.join(report_dir, "*_qu.png")))
     _add_section("6. Polarimetría — Diagrama Q–U", qu)
+
+    # 6. Polarimetry: Estimate interstellar (ISM) polarization from high-SNR q,u distributions
+    story.append(Paragraph("6. Polarimetría — Estimación Interestelar (ISM)", h1))
+
+    # Extraemos parámetros
+    qm  = ism_params['ism_estimation']['q_means']
+    qs  = ism_params['ism_estimation']['q_sigmas']
+    qw  = ism_params['ism_estimation']['q_weights']
+    um  = ism_params['ism_estimation']['u_means']
+    us  = ism_params['ism_estimation']['u_sigmas']
+    uw  = ism_params['ism_estimation']['u_weights']
+    dq  = ism_params['ism_estimation']['dominant_q']
+    du  = ism_params['ism_estimation']['dominant_u']
+
+    # Preparamos la tabla
+    ism_data = [[
+        "Comp.",
+        "Q mean", "Q σ", "Q weight",
+        "U mean", "U σ", "U weight",
+        "Dom Q", "Dom U"
+    ]]
+    # Una fila por componente
+    for i in range(len(qm)):
+        mu_q   = qm[i]
+        sig_q  = qs[i]
+        w_q    = qw[i]
+        mu_u   = um[i]
+        sig_u  = us[i]
+        w_u    = uw[i]
+
+        # Función auxiliar
+        def fmt(x, fmt_str):
+            return fmt_str.format(x) if isinstance(x, (int, float)) else str(x)
+        
+        row = [
+        str(i),
+        fmt(mu_q, "{:.3f}"),
+        fmt(sig_q, "{:.3f}"),
+        fmt(w_q, "{:.2f}"),
+        fmt(mu_u, "{:.3f}"),
+        fmt(sig_u, "{:.3f}"),
+        fmt(w_u, "{:.2f}"),
+        "✔" if i == dq else "",
+        "✔" if i == du else ""
+    ]
+    ism_data.append(row)
+
+    # Creamos y estilizamos la tabla
+    ism_table = Table(ism_data, hAlign="LEFT")
+    ism_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+        ("TEXTCOLOR",  (0, 0), (-1, 0), colors.black),
+        ("ALIGN",      (0, 0), (-1, -1), "CENTER"),
+        ("GRID",       (0, 0), (-1, -1), 0.5, colors.grey),
+        ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME",   (0, 1), (-1, -1), "Helvetica"),
+    ]))
+    story.append(ism_table)
+    story.append(Spacer(1, 12))
+
+
+    # Construimos el texto HTML para la leyenda
+    legend_text = (
+        '<b>Explicación de columnas:</b><br/>'
+        '<b>Q Means:</b> medias de la componente q estimada para la polarización interestelar.<br/>'
+        '<b>Q sigmas:</b> desviaciones estándar (σ) de los componentes gaussianos ajustados a q.<br/>'
+        '<b>Q weights:</b> pesos relativos de cada componente gaussiano en la mezcla de q.<br/>'
+        '<b>U Means:</b> medias de la componente u estimada para la polarización interestelar.<br/>'
+        '<b>U sigmas:</b> desviaciones estándar (σ) de los componentes gaussianos ajustados a u.<br/>'
+        '<b>U weights:</b> pesos relativos de cada componente gaussiano en la mezcla de u.'
+    )
+
+    # Lo añadimos al flujo de document
+    story.append(Paragraph(legend_text, normal))
+    story.append(Spacer(1, 12))
+
+    # Histograma de ISM con ajuste GMM Q
+    q = sorted(glob.glob(os.path.join(report_dir, "*q_ism_hist.png")))
+    _add_section("6. Polarimetría — Histograma de ISM con ajuste GMM Q", q)
+    
+    # Histograma de ISM con ajuste GMM U
+    u = sorted(glob.glob(os.path.join(report_dir, "*u_ism_hist.png")))
+    _add_section("6. Polarimetría — Histograma de ISM con ajuste GMM U", u)
 
     # Build and write the PDF
     doc.build(story)

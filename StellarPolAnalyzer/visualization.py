@@ -20,6 +20,7 @@ in a reproducible “report” folder structure.
 """
 
 import os
+from matplotlib.path import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
@@ -459,3 +460,71 @@ def plot_qu_diagram(polar_results, report_dir, filename="qu_diagram.png"):
     out = os.path.join(report_dir, filename)
     fig.savefig(out, bbox_inches='tight')
     plt.close(fig)
+
+def plot_ism_histogram(values: list[float],
+                       label: str,
+                       outfile: Path,
+                       bins: int = 30):
+    """
+    Dibuja un histograma de los valores (q o u) y lo guarda en PNG.
+
+    Parameters
+    ----------
+    values : list of float
+        Lista de valores q o u.
+    label : str
+        Etiqueta para el eje x, e.g. 'q' o 'u'.
+    outfile : Path
+        Destino del PNG.
+    bins : int
+        Número de bins en el histograma.
+
+    Returns
+    -------
+    Path
+        Ruta al PNG generado.
+    """
+    import matplotlib.pyplot as plt
+
+    plt.figure()
+    plt.hist(values, bins=bins, edgecolor='black')
+    plt.xlabel(label)
+    plt.ylabel('Cuenta')
+    plt.title(f'Histograma de {label} para ISM')
+    plt.tight_layout()
+    plt.savefig(outfile)
+    plt.close()
+    return outfile
+
+def plot_ism_gmm_histogram(values, means, sigmas, weights, label, outfile, bins=30):
+    """
+    Dibuja un histograma de `values` y sobre él las gaussianas del GMM,
+    pero sólo para las componentes numéricas y con sigma > 0.
+    """
+    # Histograma normalizado a densidad
+    counts, bin_edges, _ = plt.hist(values, bins=bins, density=True,
+                                    alpha=0.6, edgecolor='black')
+    x = np.linspace(bin_edges[0], bin_edges[-1], 1000)
+
+    # Superponer sólo las gaussianas válidas
+    for i, (mu, sigma, w) in enumerate(zip(means, sigmas, weights)):
+        # Saltar placeholders o ceros
+        if not isinstance(mu, (int, float)): 
+            continue
+        if not isinstance(sigma, (int, float)) or sigma <= 0:
+            continue
+        if not isinstance(w, (int, float)) or w <= 0:
+            continue
+
+        pdf = w * (1.0/(sigma * np.sqrt(2*np.pi))) * np.exp(-0.5 * ((x - mu)/sigma)**2)
+        plt.plot(x, pdf, linewidth=2,
+                 label=f'Comp {i}: μ={mu:.3f}, σ={sigma:.3f}, w={w:.2f}')
+
+    plt.xlabel(label)
+    plt.ylabel('Densidad')
+    plt.title(f'Histograma de {label} con ajuste GMM')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(outfile)
+    plt.close()
+    return outfile

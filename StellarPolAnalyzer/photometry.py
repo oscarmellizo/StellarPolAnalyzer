@@ -192,6 +192,11 @@ def compute_polarimetry_for_pairs(final_image_paths, sources, final_pairs,
                 'error'    : err_avg
             })
 
+    high_snr = [r for r in results if r['fluxes'][0.0]['ord_snr'] >= 100 and r['fluxes'][0.0]['ext_snr'] >= 100]
+    q_vals = [r['q'] for r in high_snr]
+    u_vals = [r['u'] for r in high_snr]
+    return results, q_vals, u_vals
+    
     return results
 
 def calcula_umbral_snr_gmm(snr_vals):

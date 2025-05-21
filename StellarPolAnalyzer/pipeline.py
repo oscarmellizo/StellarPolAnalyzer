@@ -37,8 +37,9 @@ from .detection import process_image
 from .alignment import align_images, save_fits_with_same_headers
 from .photometry import compute_polarimetry_for_pairs
 from .astrometry import annotate_with_astrometry_net
-from .visualization import draw_pairs, save_plot, draw_apertures, plot_polarization_errors, plot_polarization_map, plot_histogram_P, plot_histogram_theta, plot_qu_diagram
+from .visualization import draw_pairs, save_plot, draw_apertures, plot_polarization_errors, plot_polarization_map, plot_histogram_P, plot_histogram_theta, plot_qu_diagram, plot_ism_gmm_histogram
 from .report import generate_pdf_report
+from .utils import estimate_ism_from_histograms
 
 
 def compute_full_polarimetry(
@@ -167,7 +168,7 @@ def compute_full_polarimetry(
 
     # Step 4: photometry & polarimetry on reference
     _, sources, _, final_pairs, _, _ = process_results[0]
-    polar_results = compute_polarimetry_for_pairs(
+    polar_results, q_vals, u_vals = compute_polarimetry_for_pairs(
         final_paths,
         sources,
         final_pairs,
@@ -180,14 +181,39 @@ def compute_full_polarimetry(
         hist_filename="snr_hist.png"
     )
     
+     # Estimate interstellar (ISM) polarization from high-SNR q,u distributions
+    ism_params = estimate_ism_from_histograms(q_vals, u_vals, n_components=2)
+    
     if save_plots and report_dir:
         plot_polarization_errors(
             polar_results,
             report_dir,
             filename="polar_errors.png"
         )
+        #plot_ism_histogram(q_vals, 'q', report_dir + '/q_ism_hist.png')
+        #plot_ism_histogram(u_vals, 'u', report_dir + '/u_ism_hist.png')
+        
+        # ism_params = estimate_ism_from_histograms(...)
+        q_hist_png = plot_ism_gmm_histogram(
+            q_vals,
+            ism_params['ism_estimation']['q_means'],
+            ism_params['ism_estimation']['q_sigmas'],
+            ism_params['ism_estimation']['q_weights'],
+            label='q',
+            outfile=report_dir + '/q_ism_hist.png',
+            bins=30
+        )
+        u_hist_png = plot_ism_gmm_histogram(
+            u_vals,
+            ism_params['ism_estimation']['u_means'],
+            ism_params['ism_estimation']['u_sigmas'],
+            ism_params['ism_estimation']['u_weights'],
+            label='u',
+            outfile=report_dir + '/u_ism_hist.png',
+            bins=30
+        )
 
-    return process_results, polar_results, final_paths
+    return process_results, polar_results, final_paths, ism_params
 
 
 def run_complete_polarimetric_pipeline(
@@ -256,7 +282,7 @@ def run_complete_polarimetric_pipeline(
     report_directory_assets = report_dir + "/assets"
     
     # 1) Polarimetric processing
-    process_results, polar_results, final_paths = compute_full_polarimetry(
+    process_results, polar_results, final_paths, ism_params = compute_full_polarimetry(
         ref_path,
         other_paths,
         fwhm=fwhm,
@@ -324,10 +350,14 @@ def run_complete_polarimetric_pipeline(
     with open(report_dir + '/pipeline_results.json', 'w', encoding='utf-8') as f:
         json.dump(elementos, f, indent=4, ensure_ascii=False)
 
+    with open(report_dir + '/ism_estimation.json', 'w', encoding='utf-8') as f:
+        json.dump(ism_params, f, indent=4, ensure_ascii=False)
+
     generate_pdf_report(
         report_dir=report_directory_assets,
         output_pdf=report_dir + "/Polarimetric_Report.pdf",
         polar_results=polar_results,
+        ism_params=ism_params,
         enriched_results=enriched
     )
     return final_paths, polar_results, wcs, enriched

@@ -1,8 +1,11 @@
 import json
 import math
 import os
+import numpy as np
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import landscape, legal
+from reportlab.lib.units import mm
+from sklearn.mixture import GaussianMixture
 
 def write_candidate_pairs_to_file(candidate_pairs, filename="candidate_pairs.txt"):
     """
@@ -43,23 +46,10 @@ def generate_star_report(json_path: str,
                          pdf_path: str,
                          json_out_path: str = None):
     """
-    Genera un PDF y un JSON con el resultado polarimétrico de una estrella.
-
-    Parámetros
-    ----------
-    json_path : str
-        Ruta al archivo pipeline_results.json.
-    simbad_id : str
-        Identificador SIMBAD de la estrella (p.ej. "1H 1936+541").
-    filter_name : str
-        Filtro (I, R, V, B).
-    pdf_path : str
-        Ruta donde se escribirá el PDF final.
-    json_out_path : str, opcional
-        Ruta donde se escribirá el JSON. Si no se provee, se usa el mismo nombre que `pdf_path`
-        reemplazando la extensión por `.json`.
+    Genera un PDF y un JSON con el resultado polarimétrico de una estrella,
+    incluyendo la estimación ISM de q y u, con tamaño de página adaptado
+    al número de columnas.
     """
-
     # 1) Cargo el JSON de entrada
     with open(json_path, 'r', encoding='utf-8') as f:
         records = json.load(f)
@@ -70,12 +60,11 @@ def generate_star_report(json_path: str,
         raise ValueError(f"No existe simbad_id = '{simbad_id}' en {json_path}")
 
     # 3) Calculo P (%) y su error (%)
-    P_pct   = rec['P']       # ya viene en porcentaje (p.ej. 8.076)
+    P_pct   = rec['P']
     err_pct = rec['error']
 
     # 4) Calculo θ (°) y su error (°)
-    theta_deg   = rec['theta']  # ya en grados
-    # σθ = (σP)/(2·P) * (180/π)
+    theta_deg   = rec['theta']
     sigma_theta = (err_pct / (2.0 * P_pct)) * (180.0 / math.pi)
 
     # 5) RA/Dec (°)
@@ -84,234 +73,266 @@ def generate_star_report(json_path: str,
 
     # 6) Preparo los datos
     data = {
-        'simbad_id': simbad_id,
-        'filter':    filter_name.upper(),
-        'P_pct':     round(P_pct, 2),
-        'err_pct':   round(err_pct, 2),
-        'theta_deg': round(theta_deg, 2),
+        'simbad_id':     simbad_id,
+        'filter':        filter_name.upper(),
+        'P_pct':         round(P_pct, 2),
+        'err_pct':       round(err_pct, 2),
+        'theta_deg':     round(theta_deg, 2),
         'err_theta_deg': round(sigma_theta, 2),
-        'ra_deg':    round(ra_deg, 6) if ra_deg is not None else None,
-        'dec_deg':   round(dec_deg, 6) if dec_deg is not None else None,
+        'ra_deg':        round(ra_deg, 6) if ra_deg is not None else None,
+        'dec_deg':       round(dec_deg, 6) if dec_deg is not None else None,
     }
 
-    # 7) Determino ruta JSON de salida
+    # 7) Cargo estimación ISM
+    ism_file = os.path.join(os.path.dirname(json_path), 'ism_estimation.json')
+    if os.path.exists(ism_file):
+        ism = json.load(open(ism_file, 'r')).get('ism_estimation', {})
+        qm = ism['q_means']; qs = ism['q_sigmas']; dq = ism['dominant_q']
+        um = ism['u_means']; us = ism['u_sigmas']; du = ism['dominant_u']
+        data.update({
+            'Q_ISM':     round(qm[dq], 3),
+            'err_Q_ISM': round(qs[dq], 3),
+            'ISM_dom_q': dq,
+            'U_ISM':     round(um[du], 3),
+            'err_U_ISM': round(us[du], 3),
+            'ISM_dom_u': du
+        })
+    else:
+        for key in ('Q_ISM','err_Q_ISM','ISM_dom_q','U_ISM','err_U_ISM','ISM_dom_u'):
+            data[key] = None
+
+    # 8) JSON de salida
     if json_out_path is None:
         base, _ = os.path.splitext(pdf_path)
         json_out_path = f"{base}.json"
-
-    # 8) Validación y creación de directorios
-    for path in [pdf_path, json_out_path]:
-        dirpath = os.path.dirname(path)
-        if dirpath and not os.path.exists(dirpath):
-            os.makedirs(dirpath, exist_ok=True)
-    
-    # 9) Escribo el JSON
+    os.makedirs(os.path.dirname(json_out_path), exist_ok=True)
     with open(json_out_path, 'w', encoding='utf-8') as jf:
         json.dump(data, jf, ensure_ascii=False, indent=2)
 
-    # 10) Genero el PDF
-    c = canvas.Canvas(pdf_path, pagesize=landscape(legal))
-    W, H = landscape(legal)
-    y = H - 50
-
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(50, y, f"Polarimetric Report — {simbad_id} ({filter_name.upper()})")
-    y -= 30
-
-    # Tabla
-    headers = ["simbad_id", "filtro", "P (%)", "err_P (%)", "θ (°)", "err_θ (°)", "RA (°)", "Dec (°)"]
-    vals    = [
+    # 9) Preparar PDF con ancho dinámico
+    headers = [
+        "simbad_id","Filtro",
+        "P (%)","err_P (%)",
+        "θ (°)","err_θ (°)",
+        "Q_ISM","err_Q_ISM","ISM_dom_q",
+        "U_ISM","err_U_ISM","ISM_dom_u",
+        "RA","Dec"
+    ]
+    vals = [
         data['simbad_id'], data['filter'],
         f"{data['P_pct']}", f"{data['err_pct']}",
         f"{data['theta_deg']}", f"{data['err_theta_deg']}",
+        f"{data['Q_ISM']}"     if data['Q_ISM']     is not None else "",
+        f"{data['err_Q_ISM']}" if data['err_Q_ISM'] is not None else "",
+        f"{data['ISM_dom_q']}" if data['ISM_dom_q'] is not None else "",
+        f"{data['U_ISM']}"     if data['U_ISM']     is not None else "",
+        f"{data['err_U_ISM']}" if data['err_U_ISM'] is not None else "",
+        f"{data['ISM_dom_u']}" if data['ISM_dom_u'] is not None else "",
         f"{data['ra_deg']}", f"{data['dec_deg']}"
     ]
-    x_positions = [50, 140, 200, 270, 350, 420, 490, 560]
 
-    c.setFont("Helvetica-Bold", 12)
+    # Parámetros de layout
+    margin    = 20 * mm
+    n_cols    = len(headers)
+    col_width = 40 * mm  # ajusta este valor si necesitas más o menos ancho
+    page_w    = margin*2 + col_width * n_cols
+    page_h    = 80 * mm  # altura suficiente
+    c = canvas.Canvas(pdf_path, pagesize=(page_w, page_h))
+    W, H = page_w, page_h
+    y = H - 20 * mm
+
+    # Título
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(margin, y, f"Polarimetric Report — {simbad_id} ({data['filter']})")
+    y -= 12 * mm
+
+    # Calcular posiciones X
+    x_positions = [margin + i*col_width for i in range(n_cols)]
+
+    # Dibujar cabeceras
+    c.setFont("Helvetica-Bold", 10)
     for x, h in zip(x_positions, headers):
         c.drawString(x, y, h)
-    y -= 20
+    y -= 8 * mm
 
-    c.setFont("Helvetica", 12)
+    # Dibujar valores
+    c.setFont("Helvetica", 10)
     for x, v in zip(x_positions, vals):
         c.drawString(x, y, v)
-    y -= 40
+    y -= 20 * mm
 
-    # Descripción
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, y, "Descripción de columnas:")
-    y -= 20
-    c.setFont("Helvetica", 11)
+    # Descripción de columnas
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(margin, y, "Descripción de columnas:")
+    y -= 6 * mm
+    c.setFont("Helvetica", 9)
     bullets = [
-        ("simbad_id",      "Identificador del objeto en SIMBAD."),
-        ("filtro",         "Filtro fotométrico usado (I, R, V o B)."),
-        ("P (%)",          "Grado de polarización lineal en %: 100·√(q²+u²)."),
-        ("err_P (%)",      "Incertidumbre de P en %, tal como la entrega el pipeline."),
-        ("θ (°)",          "Ángulo de polarización: θ = ½·atan2(u,q)."),
-        ("err_θ (°)",      "Error de θ: σθ = (σP)/(2P)·(180/π)."),
-        ("RA (°)",         "Ascensión recta (ICRS, J2000) en grados."),
-        ("Dec (°)",        "Declinación (ICRS, J2000) en grados.")
+        ("simbad_id",    "Identificador del objeto en SIMBAD."),
+        ("Filtro",       "Filtro fotométrico (I, R, V o B)."),
+        ("P (%)",        "Grado de polarización lineal en %."),
+        ("err_P (%)",    "Error de P en %."),
+        ("θ (°)",        "Ángulo de polarización en grados."),
+        ("err_θ (°)",    "Error de θ en grados."),
+        ("Q_ISM",        "Media de q del ISM."),
+        ("err_Q_ISM",    "σ de q del ISM."),
+        ("ISM_dom_q",    "Índice de componente dominante q (0 o 1)."),
+        ("U_ISM",        "Media de u del ISM."),
+        ("err_U_ISM",    "σ de u del ISM."),
+        ("ISM_dom_u",    "Índice de componente dominante u (0 o 1)."),
+        ("RA",           "Ascensión recta (°)."),
+        ("Dec",          "Declinación (°).")
     ]
     for label, desc in bullets:
-        if y < 100:
+        if y < 10 * mm:
             c.showPage()
-            y = H - 50
-            c.setFont("Helvetica", 11)
-        c.drawString(60, y, f"• {label}: {desc}")
-        y -= 16
+            y = H - 20 * mm
+            c.setFont("Helvetica", 9)
+        c.drawString(margin + 5*mm, y, f"• {label}: {desc}")
+        y -= 5 * mm
 
     c.save()
-
     print(f"PDF generado en:  {pdf_path}")
     print(f"JSON generado en: {json_out_path}")
-
 
 def generate_final_report(json_dir: str,
                           pdf_path: str,
                           json_out_path: str = None):
     """
-    Genera un reporte final agregando múltiples archivos JSON.
-
-    Parámetros
-    ----------
-    json_dir : str
-        Carpeta que contiene los archivos .json individuales.
-    pdf_path : str
-        Ruta de salida para el PDF resumen.
-    json_out_path : str, opcional
-        Ruta de salida para el JSON resumen. Si no se provee, se usa mismo nombre del PDF con extensión .json.
+    Genera un reporte final con ancho de página dinámico
+    para alojar todas las columnas, incluyendo las componentes
+    dominantes de ISM para q y u en cada filtro.
     """
-    # 1) Agrupar registros
+    # 1) Agrupar registros…
     data = {}
     for fname in os.listdir(json_dir):
         if not fname.lower().endswith('.json'):
             continue
-        print(fname)
         full = os.path.join(json_dir, fname)
-        with open(full, 'r', encoding='utf-8') as f:
-            rec = json.load(f)
-        sid = rec.get('simbad_id')
-        filt = rec.get('filter', '').upper()
-        if sid is None or filt == '':
+        rec = json.load(open(full, 'r', encoding='utf-8'))
+        sid  = rec.get('simbad_id')
+        filt = rec.get('filter',    '').upper()
+        if not sid or not filt:
             continue
-        if sid not in data:
-            data[sid] = {
-                'ra_deg': rec.get('ra_deg'),
-                'dec_deg': rec.get('dec_deg'),
-                'filters': {}
-            }
-        data[sid]['filters'][filt] = rec
+        data.setdefault(sid, {
+            'ra_deg':  rec.get('ra_deg'),
+            'dec_deg': rec.get('dec_deg'),
+            'filters': {}
+        })['filters'][filt] = rec
 
-    # 2) Construir filas para la tabla
+    # 2) Definir filtros y encabezados
+    filters = ['I','R','B','V']
+    headers = ['Object']
+    for F in filters:
+        headers += [
+            f"{F} (%Pol {F})",
+            f"{F} (Angle {F})",
+            f"{F} Q_ISM",
+            f"{F} U_ISM",
+            f"{F} dom_q",
+            f"{F} dom_u"
+        ]
+    headers += ['RA','DEC']
+
+    # 3) Construir filas
     rows = []
-    filters = ['I', 'R', 'B', 'V']
     for sid, info in data.items():
         row = {'Object': sid}
         for F in filters:
-            rec = info['filters'].get(F)
+            rec = info['filters'].get(F, {})
             if rec:
-                P = f"{rec['P_pct']:.2f} ± {rec['err_pct']:.2f}"
-                A = f"{rec['theta_deg']:.2f} ± {rec['err_theta_deg']:.2f}"
+                row[f"{F} (%Pol {F})"]  = f"{rec['P_pct']:.2f} ± {rec['err_pct']:.2f}"
+                row[f"{F} (Angle {F})"] = f"{rec['theta_deg']:.2f} ± {rec['err_theta_deg']:.2f}"
+                row[f"{F} Q_ISM"]       = f"{rec.get('Q_ISM',0):.3f} ± {rec.get('err_Q_ISM',0):.3f}"
+                row[f"{F} U_ISM"]       = f"{rec.get('U_ISM',0):.3f} ± {rec.get('err_U_ISM',0):.3f}"
+                row[f"{F} dom_q"]       = str(rec.get('ISM_dom_q', ''))
+                row[f"{F} dom_u"]       = str(rec.get('ISM_dom_u', ''))
             else:
-                P = ''
-                A = ''
-            row[f"{F} (%Pol {F})"]   = P
-            row[f"{F} (Angle {F})"]   = A
+                # si no hay rec, dejo todas las columnas vacías
+                for col in [
+                    f"{F} (%Pol {F})",
+                    f"{F} (Angle {F})",
+                    f"{F} Q_ISM",
+                    f"{F} U_ISM",
+                    f"{F} dom_q",
+                    f"{F} dom_u"
+                ]:
+                    row[col] = ''
         row['RA']  = info.get('ra_deg')
         row['DEC'] = info.get('dec_deg')
         rows.append(row)
 
-    # 3) Determinar JSON de salida
+    # 4) JSON de salida
     if json_out_path is None:
         base, _ = os.path.splitext(pdf_path)
-        json_out_path = base + '.json'
-
-    # 4) Validar y crear directorios
-    for path in [pdf_path, json_out_path]:
-        d = os.path.dirname(path)
-        if d and not os.path.exists(d):
-            os.makedirs(d, exist_ok=True)
-
-    # 5) Escribir JSON resumen
+        json_out_path = f"{base}.json"
+    os.makedirs(os.path.dirname(json_out_path), exist_ok=True)
     with open(json_out_path, 'w', encoding='utf-8') as jf:
         json.dump(rows, jf, ensure_ascii=False, indent=2)
 
-    # 6) Generar PDF resumen
-    c = canvas.Canvas(pdf_path, pagesize=landscape(legal))
-    W, H = landscape(legal)
-    y = H - 50
-    # Título
+    # 5) Configurar canvas con ancho dinámico
+    margin = 20 * mm
+    n_cols = len(headers)
+    col_width = 40 * mm  # ajusta este ancho si necesitas más o menos espacio
+    page_width = margin*2 + col_width * n_cols
+    page_height = 180 * mm
+    c = canvas.Canvas(pdf_path, pagesize=(page_width, page_height))
+    W, H = page_width, page_height
+    y = H - 20 * mm
+
+    # 6) Título
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(50, y, "Final Polarimetric Summary")
-    y -= 30
+    c.drawString(margin, y, "Final Polarimetric Summary")
+    y -= 10 * mm
 
-    # Encabezado tabla
-    headers = [
-        'Object',
-        'I (%Pol I)', 'R (%Pol R)', 'B (%Pol B)', 'V (%Pol V)',
-        'I (Angle I)', 'R (Angle R)', 'B (Angle B)', 'V (Angle V)',
-        'RA', 'DEC'
-    ]
-    x_pos = [
-      50,   # Object
-      200,  # I (%Pol I)
-      280,  # R (%Pol R)
-      360,  # B (%Pol B)
-      440,  # V (%Pol V)
-      520,  # I (Angle I)
-      600,  # R (Angle R)
-      680,  # B (Angle B)
-      760,  # V (Angle V)
-      840,  # RA
-      920   # DEC
-    ]
+    # 7) Calcular posiciones X
+    x_positions = [margin + i*col_width for i in range(n_cols)]
+
+    # 8) Dibujar encabezados
     c.setFont("Helvetica-Bold", 10)
-    for x, h in zip(x_pos, headers):
+    for x, h in zip(x_positions, headers):
         c.drawString(x, y, h)
-    y -= 15
+    y -= 8 * mm
 
-    # Filas
+    # 9) Dibujar filas de datos
     c.setFont("Helvetica", 9)
     for row in rows:
-        for x, h in zip(x_pos, headers):
+        for x, h in zip(x_positions, headers):
             v = row.get(h, '')
             c.drawString(x, y, str(v))
-        y -= 12
-        if y < 100:
+        y -= 6 * mm
+        if y < 30 * mm:
             c.showPage()
-            y = H - 50
+            y = H - 20 * mm
             c.setFont("Helvetica-Bold", 10)
-            for x, h in zip(x_pos, headers):
+            for x, h in zip(x_positions, headers):
                 c.drawString(x, y, h)
-            y -= 15
+            y -= 8 * mm
             c.setFont("Helvetica", 9)
 
-    # Descripción de columnas
-    y -= 20
+    # 10) Descripción de columnas
+    y -= 10 * mm
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, y, "Column Descriptions:")
-    y -= 20
+    c.drawString(margin, y, "Column Descriptions:")
+    y -= 8 * mm
     c.setFont("Helvetica", 10)
-    descs = [
-        ("Object",          "Identificador SIMBAD de la fuente."),
-        ("X (%Pol X)",      "Polarización P ± error en %% en banda X."),
-        ("X (Angle X)",     "Ángulo θ ± error en grados en banda X."),
-        ("RA",              "Ascensión recta ICRS J2000 en grados."),
-        ("DEC",             "Declinación ICRS J2000 en grados.")
-    ]
-    # repetir descripción para cada banda X
+    descs = [("Object","Identificador SIMBAD.")]
     for F in filters:
-        descs.insert(1, (f"{F} (%Pol {F})", f"P ± error en banda {F}"))
-        descs.insert(2, (f"{F} (Angle {F})", f"θ ± error en grados en banda {F}"))
-
+        descs += [
+            (f"{F} (%Pol {F})",  "Polarización P ± error en %"),
+            (f"{F} (Angle {F})", "Ángulo θ ± error en °"),
+            (f"{F} Q_ISM",       "q_ISM ± σ"),
+            (f"{F} U_ISM",       "u_ISM ± σ"),
+            (f"{F} dom_q",       "Índice de componente dominante de q (0 o 1)"),
+            (f"{F} dom_u",       "Índice de componente dominante de u (0 o 1)")
+        ]
+    descs += [("RA","Ascensión recta (°)"),("DEC","Declinación (°)")]
     for label, text in descs:
-        if y < 50:
+        if y < 20 * mm:
             c.showPage()
-            y = H - 50
+            y = H - 20 * mm
             c.setFont("Helvetica", 10)
-        c.drawString(60, y, f"• {label}: {text}")
-        y -= 14
+        c.drawString(margin + 5*mm, y, f"• {label}: {text}")
+        y -= 5 * mm
 
     c.save()
     print(f"PDF generado: {pdf_path}")
@@ -350,3 +371,58 @@ def run_star_report(json_path: str, simbad_id: str, filter_name: str, output_dir
     )
 
     print(f"Reporte generado: PDF → {pdf_path} | JSON → {json_out_path}")
+    
+def estimate_ism_from_histograms(q_vals, u_vals,
+                                 n_components=2,
+                                 random_state=0):
+    """
+    Ajusta GaussianMixture a las distribuciones de q y u.
+    Siempre devuelve listas de longitud n_components:
+      - Si hay <2 muestras, la segunda componente es '-' (placeholder).
+    Retorna dict con:
+      q_means, q_sigmas, q_weights,
+      u_means, u_sigmas, u_weights,
+      dominant_q, dominant_u
+    """
+    def _safe_fit(data):
+        # Cálculo básico de media y sigma
+        mean  = float(np.mean(data)) if len(data) > 0 else 0.0
+        sigma = float(np.std(data, ddof=0)) if len(data) > 0 else 0.0
+
+        # Si no hay al menos 2 muestras, devolvemos placeholder en segunda posición
+        if len(data) < 2:
+            means   = [mean, "-"]
+            sigmas  = [sigma, "-"]
+            weights = [1.0, "-"]
+            return means, sigmas, weights
+
+        # Ajuste GMM normal
+        X = np.array(data).reshape(-1, 1)
+        gmm = GaussianMixture(n_components=n_components,
+                              random_state=random_state)
+        gmm.fit(X)
+        means   = gmm.means_.flatten().tolist()
+        sigmas  = np.sqrt(gmm.covariances_).flatten().tolist()
+        weights = gmm.weights_.flatten().tolist()
+        return means, sigmas, weights
+
+    # Ajuste seguro para q y u
+    q_means, q_sigmas, q_weights = _safe_fit(q_vals)
+    u_means, u_sigmas, u_weights = _safe_fit(u_vals)
+
+    # Índice de componente dominante (ponderado con '1.0' vs '-' → argmax queda en 0)
+    dominant_q = int(np.nanargmax([w if isinstance(w, float) else 0 for w in q_weights]))
+    dominant_u = int(np.nanargmax([w if isinstance(w, float) else 0 for w in u_weights]))
+    
+    inner = {
+        'q_means':   q_means,
+        'q_sigmas':  q_sigmas,
+        'q_weights': q_weights,
+        'u_means':   u_means,
+        'u_sigmas':  u_sigmas,
+        'u_weights': u_weights,
+        'dominant_q': dominant_q,
+        'dominant_u': dominant_u
+    }
+    # Devolver un solo elemento llamado 'ism_estimation'
+    return {'ism_estimation': inner}
