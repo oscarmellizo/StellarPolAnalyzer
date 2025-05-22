@@ -49,6 +49,7 @@ from reportlab.platypus import (
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
+from .utils import fme, fmt
 
 
 def generate_pdf_report(report_dir, output_pdf, polar_results, ism_params, enriched_results):
@@ -175,68 +176,6 @@ def generate_pdf_report(report_dir, output_pdf, polar_results, ism_params, enric
     story.append(astro_table)
     story.append(PageBreak())
 
-    # 6. Polarimetry: Estimate interstellar (ISM) polarization from high-SNR q,u distributions
-    story.append(Paragraph("6. Polarimetría — Estimación Interestelar (ISM)", h1))
-
-    # extraemos todos los parámetros
-    q_means   = ism_params['ism_estimation']['q_means']
-    q_sigmas  = ism_params['ism_estimation']['q_sigmas']
-    q_weights = ism_params['ism_estimation']['q_weights']
-    u_means   = ism_params['ism_estimation']['u_means']
-    u_sigmas  = ism_params['ism_estimation']['u_sigmas']
-    u_weights = ism_params['ism_estimation']['u_weights']
-    dominant_q = ism_params['ism_estimation']['dominant_q']
-    dominant_u = ism_params['ism_estimation']['dominant_u']
-
-    # Preparamos la tabla: encabezados
-    ism_data = [[
-        "Comp.",
-        "Q mean", "Q σ", "Q weight",
-        "U mean", "U σ", "U weight",
-        "Dominante Q", "Dominante U"
-    ]]
-
-    # Rellenamos filas por cada componente
-    n_comp = max(len(q_means), len(u_means))
-    for i in range(n_comp):
-        mu_q   = q_means[i]
-        sig_q  = q_sigmas[i]
-        w_q    = q_weights[i]
-        mu_u   = u_means[i]
-        sig_u  = u_sigmas[i]
-        w_u    = u_weights[i]
-
-        # Función auxiliar
-        def fmt(x, fmt_str):
-            return fmt_str.format(x) if isinstance(x, (int, float)) else str(x)
-        
-        row = [
-            str(i),
-            fmt(mu_q, "{:.3f}"),
-            fmt(sig_q, "{:.3f}"),
-            fmt(w_q, "{:.2f}"),
-            fmt(mu_u, "{:.3f}"),
-            fmt(sig_u, "{:.3f}"),
-            fmt(w_u, "{:.2f}"),
-            "✔" if i == dominant_q else "",
-            "✔" if i == dominant_u else ""
-        ]
-        ism_data.append(row)
-
-    # Dibujamos la tabla
-    ism_table = Table(ism_data, hAlign="LEFT")
-    ism_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-        ("TEXTCOLOR",  (0, 0), (-1, 0), colors.black),
-        ("ALIGN",      (0, 0), (-1, -1), "CENTER"),
-        ("GRID",       (0, 0), (-1, -1), 0.5, colors.grey),
-        ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTNAME",   (0, 1), (-1, -1), "Helvetica"),
-    ]))
-    story.append(ism_table)
-    story.append(Spacer(1, 12))
-
-
     # 6.2 Polarization map
     vec_map = sorted(glob.glob(os.path.join(report_dir, "*_map.png")))
     _add_section("6. Polarimetría — Mapa de polarización", vec_map)
@@ -261,15 +200,12 @@ def generate_pdf_report(report_dir, output_pdf, polar_results, ism_params, enric
     um  = ism_params['ism_estimation']['u_means']
     us  = ism_params['ism_estimation']['u_sigmas']
     uw  = ism_params['ism_estimation']['u_weights']
-    dq  = ism_params['ism_estimation']['dominant_q']
-    du  = ism_params['ism_estimation']['dominant_u']
-
+    
     # Preparamos la tabla
     ism_data = [[
         "Comp.",
-        "Q mean", "Q σ", "Q weight",
-        "U mean", "U σ", "U weight",
-        "Dom Q", "Dom U"
+        "Q mean ± Q σ", "Q weight",
+        "U mean ± U σ", "U weight"
     ]]
     # Una fila por componente
     for i in range(len(qm)):
@@ -280,22 +216,14 @@ def generate_pdf_report(report_dir, output_pdf, polar_results, ism_params, enric
         sig_u  = us[i]
         w_u    = uw[i]
 
-        # Función auxiliar
-        def fmt(x, fmt_str):
-            return fmt_str.format(x) if isinstance(x, (int, float)) else str(x)
-        
         row = [
-        str(i),
-        fmt(mu_q, "{:.3f}"),
-        fmt(sig_q, "{:.3f}"),
-        fmt(w_q, "{:.2f}"),
-        fmt(mu_u, "{:.3f}"),
-        fmt(sig_u, "{:.3f}"),
-        fmt(w_u, "{:.2f}"),
-        "✔" if i == dq else "",
-        "✔" if i == du else ""
-    ]
-    ism_data.append(row)
+            str(i),
+            fme([(fmt(mu_q), fmt(sig_q))]),
+            fmt(w_q),
+            fme([(fmt(mu_u), fmt(sig_u))]),
+            fmt(w_u)
+        ]
+        ism_data.append(row)
 
     # Creamos y estilizamos la tabla
     ism_table = Table(ism_data, hAlign="LEFT")

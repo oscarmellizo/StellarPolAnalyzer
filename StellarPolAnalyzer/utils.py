@@ -6,6 +6,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import landscape, legal
 from reportlab.lib.units import mm
 from sklearn.mixture import GaussianMixture
+from decimal import Decimal, InvalidOperation
 
 def write_candidate_pairs_to_file(candidate_pairs, filename="candidate_pairs.txt"):
     """
@@ -75,12 +76,12 @@ def generate_star_report(json_path: str,
     data = {
         'simbad_id':     simbad_id,
         'filter':        filter_name.upper(),
-        'P_pct':         round(P_pct, 2),
-        'err_pct':       round(err_pct, 2),
-        'theta_deg':     round(theta_deg, 2),
-        'err_theta_deg': round(sigma_theta, 2),
-        'ra_deg':        round(ra_deg, 6) if ra_deg is not None else None,
-        'dec_deg':       round(dec_deg, 6) if dec_deg is not None else None,
+        'P_pct':         P_pct,
+        'err_pct':       err_pct,
+        'theta_deg':     theta_deg,
+        'err_theta_deg': sigma_theta,
+        'ra_deg':        ra_deg if ra_deg is not None else None,
+        'dec_deg':       dec_deg if dec_deg is not None else None,
     }
 
     # 7) Cargo estimación ISM
@@ -90,15 +91,13 @@ def generate_star_report(json_path: str,
         qm = ism['q_means']; qs = ism['q_sigmas']; dq = ism['dominant_q']
         um = ism['u_means']; us = ism['u_sigmas']; du = ism['dominant_u']
         data.update({
-            'Q_ISM':     round(qm[dq], 3),
-            'err_Q_ISM': round(qs[dq], 3),
-            'ISM_dom_q': dq,
-            'U_ISM':     round(um[du], 3),
-            'err_U_ISM': round(us[du], 3),
-            'ISM_dom_u': du
+            'Q_ISM':     qm[dq],
+            'err_Q_ISM': qs[dq],
+            'U_ISM':     um[du],
+            'err_U_ISM': us[du]
         })
     else:
-        for key in ('Q_ISM','err_Q_ISM','ISM_dom_q','U_ISM','err_U_ISM','ISM_dom_u'):
+        for key in ('Q_ISM','err_Q_ISM','U_ISM','err_U_ISM'):
             data[key] = None
 
     # 8) JSON de salida
@@ -111,32 +110,29 @@ def generate_star_report(json_path: str,
 
     # 9) Preparar PDF con ancho dinámico
     headers = [
-        "simbad_id","Filtro",
-        "P (%)","err_P (%)",
-        "θ (°)","err_θ (°)",
-        "Q_ISM","err_Q_ISM","ISM_dom_q",
-        "U_ISM","err_U_ISM","ISM_dom_u",
+        "Simbad id","Filtro",
+        "Polarization P (%)",
+        "Angle θ (°)",
+        "ISM Q",
+        "ISM U",
         "RA","Dec"
     ]
+    
     vals = [
         data['simbad_id'], data['filter'],
-        f"{data['P_pct']}", f"{data['err_pct']}",
-        f"{data['theta_deg']}", f"{data['err_theta_deg']}",
-        f"{data['Q_ISM']}"     if data['Q_ISM']     is not None else "",
-        f"{data['err_Q_ISM']}" if data['err_Q_ISM'] is not None else "",
-        f"{data['ISM_dom_q']}" if data['ISM_dom_q'] is not None else "",
-        f"{data['U_ISM']}"     if data['U_ISM']     is not None else "",
-        f"{data['err_U_ISM']}" if data['err_U_ISM'] is not None else "",
-        f"{data['ISM_dom_u']}" if data['ISM_dom_u'] is not None else "",
+        fme([(data['P_pct'], data['err_pct'])]),
+        fme([(data['theta_deg'], data['err_theta_deg'])]),
+        fme([(data['Q_ISM'], data['err_Q_ISM'])]) if data['Q_ISM'] is not None and data['err_Q_ISM'] is not None else "",
+        fme([(data['U_ISM'], data['err_U_ISM'])]) if data['U_ISM'] is not None and data['err_U_ISM'] is not None else "",
         f"{data['ra_deg']}", f"{data['dec_deg']}"
     ]
 
     # Parámetros de layout
     margin    = 20 * mm
     n_cols    = len(headers)
-    col_width = 40 * mm  # ajusta este valor si necesitas más o menos ancho
+    col_width = 36 * mm  # ajusta este valor si necesitas más o menos ancho
     page_w    = margin*2 + col_width * n_cols
-    page_h    = 80 * mm  # altura suficiente
+    page_h    = 140 * mm  # altura suficiente
     c = canvas.Canvas(pdf_path, pagesize=(page_w, page_h))
     W, H = page_w, page_h
     y = H - 20 * mm
@@ -166,19 +162,14 @@ def generate_star_report(json_path: str,
     c.drawString(margin, y, "Descripción de columnas:")
     y -= 6 * mm
     c.setFont("Helvetica", 9)
+    
     bullets = [
-        ("simbad_id",    "Identificador del objeto en SIMBAD."),
+        ("Simbad id",    "Identificador del objeto en SIMBAD."),
         ("Filtro",       "Filtro fotométrico (I, R, V o B)."),
-        ("P (%)",        "Grado de polarización lineal en %."),
-        ("err_P (%)",    "Error de P en %."),
-        ("θ (°)",        "Ángulo de polarización en grados."),
-        ("err_θ (°)",    "Error de θ en grados."),
-        ("Q_ISM",        "Media de q del ISM."),
-        ("err_Q_ISM",    "σ de q del ISM."),
-        ("ISM_dom_q",    "Índice de componente dominante q (0 o 1)."),
-        ("U_ISM",        "Media de u del ISM."),
-        ("err_U_ISM",    "σ de u del ISM."),
-        ("ISM_dom_u",    "Índice de componente dominante u (0 o 1)."),
+        ("Polarization P (%)","Grado de polarización lineal en % ± error en %"),
+        ("Angle θ (°)", "Ángulo de polarización en grados ± error en °"),
+        ("ISM Q",        "Media de q del ISM ± error σ"),
+        ("ISM U",        "Media de u del ISM ± error σ"),
         ("RA",           "Ascensión recta (°)."),
         ("Dec",          "Declinación (°).")
     ]
@@ -224,42 +215,68 @@ def generate_final_report(json_dir: str,
     headers = ['Object']
     for F in filters:
         headers += [
-            f"{F} (%Pol {F})",
-            f"{F} (Angle {F})",
-            f"{F} Q_ISM",
-            f"{F} U_ISM",
-            f"{F} dom_q",
-            f"{F} dom_u"
+            f"Polarization {F}",
+            f"Angle {F}",
+            f"ISM Q - {F}",
+            f"ISM U - {F}",
         ]
     headers += ['RA','DEC']
 
     # 3) Construir filas
     rows = []
     for sid, info in data.items():
-        row = {'Object': sid}
+        row = {'object': sid}
         for F in filters:
             rec = info['filters'].get(F, {})
             if rec:
-                row[f"{F} (%Pol {F})"]  = f"{rec['P_pct']:.2f} ± {rec['err_pct']:.2f}"
-                row[f"{F} (Angle {F})"] = f"{rec['theta_deg']:.2f} ± {rec['err_theta_deg']:.2f}"
-                row[f"{F} Q_ISM"]       = f"{rec.get('Q_ISM',0):.3f} ± {rec.get('err_Q_ISM',0):.3f}"
-                row[f"{F} U_ISM"]       = f"{rec.get('U_ISM',0):.3f} ± {rec.get('err_U_ISM',0):.3f}"
-                row[f"{F} dom_q"]       = str(rec.get('ISM_dom_q', ''))
-                row[f"{F} dom_u"]       = str(rec.get('ISM_dom_u', ''))
+                row[f"pol_{F}"]  = rec['P_pct']
+                row[f"err_pol_{F}"]  = rec['err_pct']
+                row[f"angle_{F}"] = rec['theta_deg']
+                row[f"err_angle_{F}"] = rec['err_theta_deg']
+                row[f"q_ism_{F}"] = rec.get('Q_ISM',0)
+                row[f"err_q_ism_{F}"] = rec.get('err_Q_ISM',0)
+                row[f"u_ism_{F}"] = rec.get('U_ISM',0)
+                row[f"err_u_ism_{F}"] = rec.get('err_U_ISM',0)
             else:
                 # si no hay rec, dejo todas las columnas vacías
                 for col in [
-                    f"{F} (%Pol {F})",
-                    f"{F} (Angle {F})",
-                    f"{F} Q_ISM",
-                    f"{F} U_ISM",
-                    f"{F} dom_q",
-                    f"{F} dom_u"
+                    f"pol_{F}",
+                    f"err_pol_{F}",
+                    f"angle_{F}",
+                    f"err_angle_{F}"
+                    f"q_ism_{F}",
+                    f"err_q_ism_{F}",
+                    f"u_ism_{F}",
+                    f"err_u_ism_{F}"
                 ]:
                     row[col] = ''
         row['RA']  = info.get('ra_deg')
         row['DEC'] = info.get('dec_deg')
         rows.append(row)
+    
+    # 3) Construir filas
+    rows_pdf = []
+    for sid, info in data.items():
+        row = {'Object': sid}
+        for F in filters:
+            rec = info['filters'].get(F, {})
+            if rec:
+                row[f"Polarization {F}"]  = fme([(rec['P_pct'], rec['err_pct'])])
+                row[f"Angle {F}"] = fme([(rec['theta_deg'], rec['err_theta_deg'])])
+                row[f"ISM Q - {F}"] = fme([(rec.get('Q_ISM',0), rec.get('err_Q_ISM',0))])
+                row[f"ISM U - {F}"] = fme([(rec.get('U_ISM',0), rec.get('err_U_ISM',0))])
+            else:
+                # si no hay rec, dejo todas las columnas vacías
+                for col in [
+                    f"Polarization {F}",
+                    f"Angle {F}",
+                    f"ISM Q - {F}",
+                    f"ISM U - {F}"
+                ]:
+                    row[col] = ''
+        row['RA']  = info.get('ra_deg')
+        row['DEC'] = info.get('dec_deg')
+        rows_pdf.append(row)
 
     # 4) JSON de salida
     if json_out_path is None:
@@ -272,9 +289,9 @@ def generate_final_report(json_dir: str,
     # 5) Configurar canvas con ancho dinámico
     margin = 20 * mm
     n_cols = len(headers)
-    col_width = 40 * mm  # ajusta este ancho si necesitas más o menos espacio
+    col_width = 36 * mm  # ajusta este ancho si necesitas más o menos espacio
     page_width = margin*2 + col_width * n_cols
-    page_height = 180 * mm
+    page_height = 250 * mm
     c = canvas.Canvas(pdf_path, pagesize=(page_width, page_height))
     W, H = page_width, page_height
     y = H - 20 * mm
@@ -295,7 +312,7 @@ def generate_final_report(json_dir: str,
 
     # 9) Dibujar filas de datos
     c.setFont("Helvetica", 9)
-    for row in rows:
+    for row in rows_pdf:
         for x, h in zip(x_positions, headers):
             v = row.get(h, '')
             c.drawString(x, y, str(v))
@@ -318,12 +335,10 @@ def generate_final_report(json_dir: str,
     descs = [("Object","Identificador SIMBAD.")]
     for F in filters:
         descs += [
-            (f"{F} (%Pol {F})",  "Polarización P ± error en %"),
-            (f"{F} (Angle {F})", "Ángulo θ ± error en °"),
-            (f"{F} Q_ISM",       "q_ISM ± σ"),
-            (f"{F} U_ISM",       "u_ISM ± σ"),
-            (f"{F} dom_q",       "Índice de componente dominante de q (0 o 1)"),
-            (f"{F} dom_u",       "Índice de componente dominante de u (0 o 1)")
+            (f"Polarization {F}",  "Polarización P ± error en %"),
+            (f"Angle {F}", "Ángulo θ ± error en °"),
+            (f"ISM Q - {F}",       "Estimacion de medio interestelar (ISM) Q ± σ"),
+            (f"ISM U - {F}",       "Estimacion de medio interestelar (ISM) U ± σ")
         ]
     descs += [("RA","Ascensión recta (°)"),("DEC","Declinación (°)")]
     for label, text in descs:
@@ -426,3 +441,73 @@ def estimate_ism_from_histograms(q_vals, u_vals,
     }
     # Devolver un solo elemento llamado 'ism_estimation'
     return {'ism_estimation': inner}
+  
+def fme(pairs):
+    """
+    Format a (measurement, error) pair so that both numbers:
+     - Have at least 3 decimal places.
+     - Extend to the first non-zero digit in either the measurement or the error,
+       if that occurs beyond the 3rd decimal.
+
+    Args:
+        pairs (tuple or list of tuple): Either a single (measurement, error) tuple
+                                        or a list containing one such tuple.
+
+    Returns:
+        str: A string "measurement ± error" with the appropriate number of decimals.
+    """
+    # accept either a single tuple or a list of tuples
+    if isinstance(pairs, tuple) and not isinstance(pairs[0], (list, tuple)):
+        measurement, error = pairs
+    else:
+        measurement, error = pairs[0]
+
+    # convert to Decimal
+    try:
+        m = Decimal(str(measurement))
+        e = Decimal(str(error))
+    except InvalidOperation:
+        raise ValueError(f"Cannot convert {measurement} or {error} to Decimal")
+
+    def decimals_needed(x: Decimal):
+        """
+        Return the number of decimal places you must show to reach
+        the first non-zero digit in x’s fractional part.
+        If x == 0, returns 0.
+        
+        Examples:
+        0.00432 → 3   (first non-zero is the '4' in 0.00[4]32)
+        0.020   → 2   (0.[0]2)
+        3.14159 → 1   (0.[1]4159)
+        1.2300  → 1   (effectively 1.23 → 1st place is non-zero)
+        """
+        if x == 0:
+            return 0
+
+        # Remove trailing zeros and get exponent + digits
+        t = x.normalize().as_tuple()
+        digits = t.digits
+        exp = t.exponent  # negative for fractional
+
+        n_frac = -exp       # how many total fractional places
+        n_sig  = len(digits)  # how many significant digits after
+        # position of first non-zero = total_frac - sig_digits + 1
+        pos = n_frac - n_sig + 1
+
+        # at least 1 decimal needed if there's any fractional part
+        return max(pos, 1)
+
+    # compute needed decimals for measurement and error
+    dm = decimals_needed(m)
+    de = decimals_needed(e)
+
+    # at least 3 decimals, but extend to whichever needs more
+    nd = max(3, dm, de)
+
+    # build format string
+    fmt = f"{{:.{nd}f}}"
+
+    return f"{fmt.format(m)} ± {fmt.format(e)}"
+
+def fmt(val):
+    return val if isinstance(val, (int, float)) else str(val)
