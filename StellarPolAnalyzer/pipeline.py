@@ -32,6 +32,7 @@ final_paths, polar_results, wcs, enriched = run_complete_polarimetric_pipeline(
 import os
 import astropy.units as u
 import json
+import math
 from astropy.io import fits
 from .detection import process_image
 from .alignment import align_images, save_fits_with_same_headers
@@ -41,10 +42,31 @@ from .visualization import draw_pairs, save_plot, draw_apertures, plot_polarizat
 from .report import generate_pdf_report
 from .utils import estimate_ism_from_histograms
 
+# Ángulos de referencia para Hiltner 960 (Schmidt et al. 1992), en grados
+REF_ANGLES = {
+  'B': 55.06, 'V': 54.79, 'R': 54.54, 'I': 53.96
+}
+
+# Polarization instrumental offsets (medidos sobre HD 154892; Q,U en %)
+INST_OFFSETS = {
+    'B': {'q': 3.4291041672626603, 'u': -4.88708822945143},
+    'V': {'q': 2.5074183794553737, 'u': -5.272479544544009},
+    'R': {'q': 1.4703385381906753, 'u': -4.967341304186951},
+    'I': {'q': 1.1189172334736106, 'u': -4.125623240742233},
+}
+
+#INST_OFFSETS = {
+#    'B': {'q': 0.0, 'u': 0.0},
+#    'V': {'q': 0.0, 'u': 0.0},
+#    'R': {'q': 0.0, 'u': 0.0},
+#    'I': {'q': 0.0, 'u': 0.0},
+#}
 
 def compute_full_polarimetry(
     ref_path,
     other_paths,
+    pol_angles,
+    filter,
     fwhm=3.0,
     threshold_multiplier=5.0,
     tol_distance=0.52,
@@ -181,7 +203,40 @@ def compute_full_polarimetry(
         hist_filename="snr_hist.png"
     )
     
-     # Estimate interstellar (ISM) polarization from high-SNR q,u distributions
+    for rec in polar_results:
+        print("#################################################")
+        print(ref_path)
+        print("FILTER" + filter)
+        print("q" + str(rec['q']))
+        print("u" + str(rec['u']))
+        print("theta" + str(rec['theta']))
+        print("P" + str(rec['P']))
+        
+        # 1) Restar offset instrumental
+        q_corr = rec['q'] - INST_OFFSETS[filter]['q']
+        u_corr = rec['u'] - INST_OFFSETS[filter]['u']
+    
+        # 2) Recalcular P y θ desde q_corr/u_corr
+        P = math.hypot(q_corr, u_corr)
+        θ = 0.5 * math.degrees(math.atan2(u_corr, q_corr))
+    
+        # resto instrumental
+        #rec['q'] -= INST_OFFSETS[filter]['q']
+        #rec['u'] -= INST_OFFSETS[filter]['u']
+        # recalcular P, θ
+        #P = math.hypot(rec['q'],rec['u'])
+        #θ = 0.5*math.deg(math.atan2(rec['u'],rec['q']))
+        # calibrar θ
+        Δθ = θ - REF_ANGLES[filter]
+        rec['theta'] = θ - Δθ
+        rec['P'] = P
+        print("q" + str(rec['q']))
+        print("u" + str(rec['u']))
+        print("theta" + str(rec['theta']))
+        print("P" + str(rec['P']))
+        print("#################################################")
+    
+    # Estimate interstellar (ISM) polarization from high-SNR q,u distributions
     ism_params = estimate_ism_from_histograms(q_vals, u_vals, n_components=2)
     
     if save_plots and report_dir:
@@ -220,6 +275,7 @@ def run_complete_polarimetric_pipeline(
     ref_path,
     other_paths,
     pol_angles,
+    filter,
     fwhm=3.0,
     threshold_multiplier=5.0,
     tol_distance=0.52,
@@ -285,6 +341,8 @@ def run_complete_polarimetric_pipeline(
     process_results, polar_results, final_paths, ism_params = compute_full_polarimetry(
         ref_path,
         other_paths,
+        pol_angles,
+        filter,
         fwhm=fwhm,
         threshold_multiplier=threshold_multiplier,
         tol_distance=tol_distance,

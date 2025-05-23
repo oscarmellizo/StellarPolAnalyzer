@@ -90,14 +90,20 @@ def generate_star_report(json_path: str,
         ism = json.load(open(ism_file, 'r')).get('ism_estimation', {})
         qm = ism['q_means']; qs = ism['q_sigmas']; dq = ism['dominant_q']
         um = ism['u_means']; us = ism['u_sigmas']; du = ism['dominant_u']
+        q = qm[dq]
+        q_err = qs[dq]
+        u = um[du]
+        u_err = us[du]
+         # calculamos P_ISM y θ_ISM
+        P_ISM, err_P_ISM, θ_ISM, err_θ_ISM = compute_ism_pol_angle(q, u, q_err, u_err)
         data.update({
-            'Q_ISM':     qm[dq],
-            'err_Q_ISM': qs[dq],
-            'U_ISM':     um[du],
-            'err_U_ISM': us[du]
+            'p_ism':     P_ISM,
+            'err_p_ism': err_P_ISM,
+            'θ_ism':     θ_ISM,
+            'err_θ_ism': err_θ_ISM
         })
     else:
-        for key in ('Q_ISM','err_Q_ISM','U_ISM','err_U_ISM'):
+        for key in ('p_ism','err_p_ism','θ_ism','err_θ_ism'):
             data[key] = None
 
     # 8) JSON de salida
@@ -113,8 +119,8 @@ def generate_star_report(json_path: str,
         "Simbad id","Filtro",
         "Polarization P (%)",
         "Angle θ (°)",
-        "ISM Q",
-        "ISM U",
+        "P ISM (%)",
+        "θ ISM (°)",
         "RA","Dec"
     ]
     
@@ -122,8 +128,8 @@ def generate_star_report(json_path: str,
         data['simbad_id'], data['filter'],
         fme([(data['P_pct'], data['err_pct'])]),
         fme([(data['theta_deg'], data['err_theta_deg'])]),
-        fme([(data['Q_ISM'], data['err_Q_ISM'])]) if data['Q_ISM'] is not None and data['err_Q_ISM'] is not None else "",
-        fme([(data['U_ISM'], data['err_U_ISM'])]) if data['U_ISM'] is not None and data['err_U_ISM'] is not None else "",
+        fme([(data['p_ism'], data['err_p_ism'])]) if data['p_ism'] is not None and data['err_p_ism'] is not None else "",
+        fme([(data['θ_ism'], data['err_θ_ism'])]) if data['θ_ism'] is not None and data['err_θ_ism'] is not None else "",
         f"{data['ra_deg']}", f"{data['dec_deg']}"
     ]
 
@@ -168,8 +174,8 @@ def generate_star_report(json_path: str,
         ("Filtro",       "Filtro fotométrico (I, R, V o B)."),
         ("Polarization P (%)","Grado de polarización lineal en % ± error en %"),
         ("Angle θ (°)", "Ángulo de polarización en grados ± error en °"),
-        ("ISM Q",        "Media de q del ISM ± error σ"),
-        ("ISM U",        "Media de u del ISM ± error σ"),
+        ("P ISM (%)",   "Polarización del medio interestelar en %"),
+        ("θ ISM (°)",   "Ángulo del medio interestelar en grados"),
         ("RA",           "Ascensión recta (°)."),
         ("Dec",          "Declinación (°).")
     ]
@@ -217,8 +223,8 @@ def generate_final_report(json_dir: str,
         headers += [
             f"Polarization {F}",
             f"Angle {F}",
-            f"ISM Q - {F}",
-            f"ISM U - {F}",
+            f"P ISM - {F}",
+            f"θ ISM - {F}",
         ]
     headers += ['RA','DEC']
 
@@ -233,10 +239,10 @@ def generate_final_report(json_dir: str,
                 row[f"err_pol_{F}"]  = rec['err_pct']
                 row[f"angle_{F}"] = rec['theta_deg']
                 row[f"err_angle_{F}"] = rec['err_theta_deg']
-                row[f"q_ism_{F}"] = rec.get('Q_ISM',0)
-                row[f"err_q_ism_{F}"] = rec.get('err_Q_ISM',0)
-                row[f"u_ism_{F}"] = rec.get('U_ISM',0)
-                row[f"err_u_ism_{F}"] = rec.get('err_U_ISM',0)
+                row[f"P_ism_{F}"] = rec.get('p_ism',0)
+                row[f"err_P_ism_{F}"] = rec.get('err_p_ism',0)
+                row[f"θ_ism_{F}"] = rec.get('θ_ism',0)
+                row[f"err_θ_ism_{F}"] = rec.get('err_θ_ism',0)
             else:
                 # si no hay rec, dejo todas las columnas vacías
                 for col in [
@@ -244,10 +250,10 @@ def generate_final_report(json_dir: str,
                     f"err_pol_{F}",
                     f"angle_{F}",
                     f"err_angle_{F}"
-                    f"q_ism_{F}",
-                    f"err_q_ism_{F}",
-                    f"u_ism_{F}",
-                    f"err_u_ism_{F}"
+                    f"P_ism_{F}",
+                    f"err_P_ism_{F}",
+                    f"θ_ism_{F}",
+                    f"err_θ_ism_{F}"
                 ]:
                     row[col] = ''
         row['RA']  = info.get('ra_deg')
@@ -263,15 +269,15 @@ def generate_final_report(json_dir: str,
             if rec:
                 row[f"Polarization {F}"]  = fme([(rec['P_pct'], rec['err_pct'])])
                 row[f"Angle {F}"] = fme([(rec['theta_deg'], rec['err_theta_deg'])])
-                row[f"ISM Q - {F}"] = fme([(rec.get('Q_ISM',0), rec.get('err_Q_ISM',0))])
-                row[f"ISM U - {F}"] = fme([(rec.get('U_ISM',0), rec.get('err_U_ISM',0))])
+                row[f"P ISM - {F}"] = fme([(rec.get('p_ism',0), rec.get('err_p_ism',0))])
+                row[f"θ ISM - {F}"] = fme([(rec.get('θ_ism',0), rec.get('err_θ_ism',0))])
             else:
                 # si no hay rec, dejo todas las columnas vacías
                 for col in [
                     f"Polarization {F}",
                     f"Angle {F}",
-                    f"ISM Q - {F}",
-                    f"ISM U - {F}"
+                    f"P ISM - {F}",
+                    f"θ ISM - {F}"
                 ]:
                     row[col] = ''
         row['RA']  = info.get('ra_deg')
@@ -337,8 +343,8 @@ def generate_final_report(json_dir: str,
         descs += [
             (f"Polarization {F}",  "Polarización P ± error en %"),
             (f"Angle {F}", "Ángulo θ ± error en °"),
-            (f"ISM Q - {F}",       "Estimacion de medio interestelar (ISM) Q ± σ"),
-            (f"ISM U - {F}",       "Estimacion de medio interestelar (ISM) U ± σ")
+            (f"P ISM - {F}",       "Polarización del medio (%) ± error (%)"),
+            (f"θ ISM - {F}",       "Ángulo del medio (°) ± error (°)")
         ]
     descs += [("RA","Ascensión recta (°)"),("DEC","Declinación (°)")]
     for label, text in descs:
@@ -467,7 +473,8 @@ def fme(pairs):
         m = Decimal(str(measurement))
         e = Decimal(str(error))
     except InvalidOperation:
-        raise ValueError(f"Cannot convert {measurement} or {error} to Decimal")
+        print(f"Cannot convert {measurement} or {error} to Decimal")
+        return "-"
 
     def decimals_needed(x: Decimal):
         """
@@ -511,3 +518,33 @@ def fme(pairs):
 
 def fmt(val):
     return val if isinstance(val, (int, float)) else str(val)
+
+def compute_ism_pol_angle(q, u, sigma_q, sigma_u):
+    """
+    Dadas las componentes Q_ISM y U_ISM (floats o strings), 
+    devuelve (P_ISM, theta_ISM):
+      P_ISM = sqrt(q² + u²)
+      theta_ISM = 0.5 * atan2(u, q) en grados
+    Si q o u no son convertibles a float, devuelve (None, None).
+    """
+    # polarización P y ángulo θ
+    P      = math.hypot(q, u)
+    theta  = 0.5 * math.degrees(math.atan2(u, q))
+
+    # σ_P
+    if P > 0:
+        sigma_P = math.sqrt((q/P)**2 * sigma_q**2 +
+                            (u/P)**2 * sigma_u**2)
+    else:
+        sigma_P = 0.0
+
+    # σ_theta (rad)
+    denom = (q**2 + u**2)
+    if denom > 0:
+        var_theta_rad = 0.25 * ((u/denom)**2 * sigma_q**2 +
+                                (q/denom)**2 * sigma_u**2)
+        sigma_theta = math.degrees(math.sqrt(var_theta_rad))
+    else:
+        sigma_theta = 0.0
+
+    return P, sigma_P, theta, sigma_theta
